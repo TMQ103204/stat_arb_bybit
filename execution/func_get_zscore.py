@@ -4,35 +4,38 @@ from config_execution_api import session_public, ticker_1, ticker_2
 from func_calcultions import get_trade_details
 from func_price_calls import get_latest_klines
 from func_stats import calculate_metrics
+from logger_setup import get_logger
 import time
 
-# Get latest z-score
+logger = get_logger("zscore")
+
+# Get latest z-score (updated for Bybit V5 API)
 def get_latest_zscore():
 
     # Get latest asset orderbook prices and add dummy price for latest
-    # orderbook_1 = ws_public.fetch(subs_public[0]) # Removed as replacing WSS with REST API
-    orderbook_1 = session_public.orderbook(symbol=ticker_1)
+    try:
+        orderbook_1 = session_public.get_orderbook(category="linear", symbol=ticker_1)
+    except Exception as e:
+        logger.error("Failed to get orderbook for %s: %s", ticker_1, e)
+        return None
 
     # Return structured orderbook 1
-    if "ret_msg" in orderbook_1.keys():
-        if orderbook_1["ret_msg"] != "OK":
-            return
-        else:
-            orderbook_1 = orderbook_1["result"]
+    if orderbook_1["retCode"] != 0:
+        return None
 
-    mid_price_1, _, _, = get_trade_details(orderbook_1)
+    mid_price_1, _, _, = get_trade_details(orderbook_1["result"])
     time.sleep(0.5) # Using to prevent overwhelming REST API with requests and getting blocked
-    # orderbook_2 = ws_public.fetch(subs_public[1]) # Removed as replacing WSS with REST API
-    orderbook_2 = session_public.orderbook(symbol=ticker_2)
+    try:
+        orderbook_2 = session_public.get_orderbook(category="linear", symbol=ticker_2)
+    except Exception as e:
+        logger.error("Failed to get orderbook for %s: %s", ticker_2, e)
+        return None
 
     # Return structured orderbook 2
-    if "ret_msg" in orderbook_2.keys():
-        if orderbook_2["ret_msg"] != "OK":
-            return
-        else:
-            orderbook_2 = orderbook_2["result"]
+    if orderbook_2["retCode"] != 0:
+        return None
 
-    mid_price_2, _, _, = get_trade_details(orderbook_2)
+    mid_price_2, _, _, = get_trade_details(orderbook_2["result"])
     time.sleep(0.5) # Using to prevent overwhelming REST API with requests and getting blocked
 
     # Get latest price history

@@ -1,6 +1,6 @@
 """
     interval: 60, "D"
-    from: integer from timestamp in seconds
+    from: integer from timestamp in milliseconds (V5 API)
     limit: max size of 200
 """
 
@@ -18,21 +18,37 @@ if timeframe == "D":
     time_start_date = datetime.datetime.now() - datetime.timedelta(days=kline_limit)
 time_start_seconds = int(time_start_date.timestamp())
 
-# Get historical prices (klines)
+# Get historical prices (klines) - updated for Bybit V5 API
 def get_price_klines(symbol):
 
-    # Get prices
-    prices = session.query_mark_price_kline(
-        symbol = symbol,
-        interval = timeframe,
-        limit = kline_limit,
-        from_time = time_start_seconds
+    # Get prices (V5 uses start in milliseconds)
+    prices = session.get_mark_price_kline(
+        category="linear",
+        symbol=symbol,
+        interval=str(timeframe),
+        limit=kline_limit,
+        start=time_start_seconds * 1000
     )
 
     # Manage API calls
     time.sleep(0.1)
 
-    # Return output
-    if len(prices["result"]) != kline_limit:
+    # Return output - V5 returns data in result.list (newest first)
+    if prices["retCode"] != 0:
         return []
-    return prices["result"]
+
+    result_list = prices["result"]["list"]
+    if len(result_list) != kline_limit:
+        return []
+
+    # Convert V5 array format to dict format and reverse to oldest first
+    klines = []
+    for item in reversed(result_list):
+        klines.append({
+            "start_at": int(item[0]) // 1000,
+            "open": float(item[1]),
+            "high": float(item[2]),
+            "low": float(item[3]),
+            "close": float(item[4])
+        })
+    return klines

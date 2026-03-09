@@ -8,7 +8,10 @@ from func_price_calls import get_ticker_trade_liquidity
 from func_get_zscore import get_latest_zscore
 from func_execution_calls import initialise_order_execution
 from func_order_review import check_order
+from logger_setup import get_logger
 import time
+
+logger = get_logger("trade_mgmt")
 
 # Manage new trade assessment and order placing
 def manage_new_trades(kill_switch):
@@ -28,8 +31,8 @@ def manage_new_trades(kill_switch):
 
         # Active hot trigger
         hot = True
-        print("-- Trade Status HOT --")
-        print("-- Placing and Monitoring Existing Trades --")
+        logger.info("-- Trade Status HOT --")
+        logger.info("-- Placing and Monitoring Existing Trades --")
 
     # Place and manage trades
     if hot and kill_switch == 0:
@@ -79,6 +82,9 @@ def manage_new_trades(kill_switch):
         order_status_short = ""
         counts_long = 0
         counts_short = 0
+        retry_long = 0
+        retry_short = 0
+        max_retries = 5  # Maximum retry attempts before giving up
         while kill_switch == 0:
 
             # Place order - long
@@ -95,7 +101,7 @@ def manage_new_trades(kill_switch):
 
             # Update signal side
             if zscore > 0:
-                signal_side = "postive"
+                signal_side = "positive"
             else:
                 signal_side = "negative"
 
@@ -119,7 +125,7 @@ def manage_new_trades(kill_switch):
                     if counts_short == 1:
                         order_status_short = check_order(short_ticker, order_short_id, remaining_capital_short, "Short")
 
-                    print(order_status_long, order_status_short, zscore_new)
+                    logger.info("Long: %s | Short: %s | zscore: %.4f", order_status_long, order_status_short, zscore_new)
 
                     # If orders still active, do nothing
                     if order_status_long == "Order Active" or order_status_short == "Order Active":
@@ -138,18 +144,40 @@ def manage_new_trades(kill_switch):
                         counts_long = 0
                         counts_short = 0
 
-                    # If order cancelled for long - try again
+                    # If order cancelled for long - try again (with retry limit)
                     if order_status_long == "Try Again":
-                        counts_long = 0
+                        retry_long += 1
+                        logger.warning("Long order retry %d/%d", retry_long, max_retries)
+                        if retry_long >= max_retries:
+                            logger.error("Max retries reached for long order. Stopping...")
+                            session_private.cancel_all_orders(category="linear", symbol=signal_positive_ticker)
+                            session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
+                            kill_switch = 1
+                        else:
+                            counts_long = 0
 
-                    # If order cancelled for short - try again
+                    # If order cancelled for short - try again (with retry limit)
                     if order_status_short == "Try Again":
-                        counts_short = 0
+                        retry_short += 1
+                        logger.warning("Short order retry %d/%d", retry_short, max_retries)
+                        if retry_short >= max_retries:
+                            logger.error("Max retries reached for short order. Stopping...")
+                            session_private.cancel_all_orders(category="linear", symbol=signal_positive_ticker)
+                            session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
+                            kill_switch = 1
+                        else:
+                            counts_short = 0
+
+                    # If one side is complete but the other keeps failing
+                    if (order_status_long == "Trade Complete" and order_status_short == "Try Again") or \
+                       (order_status_short == "Trade Complete" and order_status_long == "Try Again"):
+                        logger.warning("One side complete, other side keeps failing. Stopping to avoid infinite loop.")
+                        kill_switch = 1
 
                 else:
                     # Cancel all active orders
-                    session_private.cancel_all_active_orders(symbol=signal_positive_ticker)
-                    session_private.cancel_all_active_orders(symbol=signal_negative_ticker)
+                    session_private.cancel_all_orders(category="linear", symbol=signal_positive_ticker)
+                    session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
                     kill_switch = 1
 
     # Output status

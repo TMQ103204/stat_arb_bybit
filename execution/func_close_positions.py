@@ -1,43 +1,48 @@
 from config_execution_api import signal_positive_ticker
 from config_execution_api import signal_negative_ticker
 from config_execution_api import session_private
+from logger_setup import get_logger
 
-# Get position information
+logger = get_logger("close_pos")
+
+# Get position information (updated for Bybit V5 API)
 def get_position_info(ticker):
 
     # Declare output variables
-    side = 0
-    size = ""
+    side = ""
+    size = 0
 
     # Extract position info
-    position = session_private.my_position(symbol=ticker)
-    if "ret_msg" in position.keys():
-        if position["ret_msg"] == "OK":
-            if len(position["result"]) == 2:
-                if position["result"][0]["size"] > 0:
-                    size = position["result"][0]["size"]
-                    side = "Buy"
-                else:
-                    size = position["result"][1]["size"]
-                    side = "Sell"
+    position_response = session_private.get_positions(category="linear", symbol=ticker)
+    position = dict(position_response) if not isinstance(position_response, dict) else position_response
+    if position["retCode"] == 0:
+        for pos in position["result"]["list"]:
+            if float(pos["size"]) > 0:
+                size = float(pos["size"])
+                side = pos["side"]
+                break
 
     # Return output
     return side, size
 
 
-#  Place market close order
+#  Place market close order (updated for Bybit V5 API)
 def place_market_close_order(ticker, side, size):
 
     # Close position
-    session_private.place_active_order(
-        symbol=ticker,
-        side=side,
-        order_type="Market",
-        qty=size,
-        time_in_force="GoodTillCancel",
-        reduce_only=True,
-        close_on_trigger=False
-    )
+    try:
+        session_private.place_order(
+            category="linear",
+            symbol=ticker,
+            side=side,
+            orderType="Market",
+            qty=str(size),
+            timeInForce="GTC",
+            reduceOnly=True
+        )
+        logger.info("Closed %s %s qty=%.6f", side, ticker, size)
+    except Exception as e:
+        logger.error("Failed to close %s %s: %s", ticker, side, e)
 
     # Return
     return
@@ -47,8 +52,11 @@ def place_market_close_order(ticker, side, size):
 def close_all_positions(kill_switch):
 
     # Cancel all active orders
-    session_private.cancel_all_active_orders(symbol=signal_positive_ticker)
-    session_private.cancel_all_active_orders(symbol=signal_negative_ticker)
+    try:
+        session_private.cancel_all_orders(category="linear", symbol=signal_positive_ticker)
+        session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
+    except Exception as e:
+        logger.error("Failed to cancel orders: %s", e)
 
     # Get position information
     side_1, size_1 = get_position_info(signal_positive_ticker)

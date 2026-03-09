@@ -1,10 +1,55 @@
 from config_execution_api import stop_loss_fail_safe
-from config_execution_api import ticker_1
-from config_execution_api import rounding_ticker_1
-from config_execution_api import rounding_ticker_2
-from config_execution_api import quantity_rounding_ticker_1
-from config_execution_api import quantity_rounding_ticker_2
+from config_execution_api import session_public
+from logger_setup import get_logger
 import math
+
+logger = get_logger("calculations")
+
+# Cache for instrument info to avoid repeated API calls
+_instrument_cache = {}
+
+def _get_instrument_info(symbol):
+    """Fetch and cache instrument info (tick size + qty step) from API."""
+    if symbol in _instrument_cache:
+        return _instrument_cache[symbol]
+    try:
+        info = session_public.get_instruments_info(category="linear", symbol=symbol)
+        item = info["result"]["list"][0]
+        price_filter = item["priceFilter"]
+        lot_filter = item["lotSizeFilter"]
+        tick_size = float(price_filter["tickSize"])
+        qty_step = float(lot_filter["qtyStep"])
+        _instrument_cache[symbol] = (tick_size, qty_step)
+        return (tick_size, qty_step)
+    except Exception as e:
+        logger.warning("Could not fetch instrument info for %s: %s", symbol, e)
+        return (None, None)
+
+
+def _decimals_from_step(step):
+    """Get number of decimal places from a step size value."""
+    if step is None or step <= 0:
+        return 8
+    step_str = f"{step:.10f}".rstrip('0')
+    return len(step_str.split('.')[-1]) if '.' in step_str else 0
+
+
+# Get qty step size from exchange instrument info
+def get_qty_step(symbol):
+    _, qty_step = _get_instrument_info(symbol)
+    return qty_step
+
+
+# Round quantity down to the nearest valid step
+def round_qty_to_step(quantity, qty_step):
+    if qty_step is None or qty_step <= 0:
+        return round(quantity)
+    # Floor to nearest step
+    floored = math.floor(quantity / qty_step) * qty_step
+    # Determine decimal places from step size to avoid floating point artifacts
+    step_str = f"{qty_step:.10f}".rstrip('0')
+    decimals = len(step_str.split('.')[-1]) if '.' in step_str else 0
+    return round(floored, decimals)
 
 
 # Puts all close prices in a list
@@ -17,54 +62,45 @@ def extract_close_prices(prices):
     return close_prices
 
 
-# Get trade details and latest prices
+# Get trade details and latest prices (updated for Bybit V5 orderbook format)
 def get_trade_details(orderbook, direction="Long", capital=0):
 
     # Set calculation and output variables
-    price_rounding = 20
-    quantity_rounding = 20
     mid_price = 0
     quantity = 0
     stop_loss = 0
-    bid_items_list = []
-    ask_items_list = []
 
     # Get prices, stop loss and quantity
     if orderbook:
 
-        # Set price rounding
-        price_rounding = rounding_ticker_1 if orderbook[0]["symbol"] == ticker_1 else rounding_ticker_2
-        quantity_rounding = quantity_rounding_ticker_1 if orderbook[0]["symbol"] == ticker_1 else quantity_rounding_ticker_2
+        # V5 orderbook uses "s" for symbol, "b" for bids, "a" for asks
+        symbol = orderbook.get("s", "")
+        tick_size, qty_step = _get_instrument_info(symbol)
+        price_rounding = _decimals_from_step(tick_size)
 
-        # Organise prices
-        for level in orderbook:
-            if level["side"] == "Buy":
-                bid_items_list.append(float(level["price"]))
+        # V5 format: bids = [[price, size], ...] (sorted desc), asks = [[price, size], ...] (sorted asc)
+        bids = orderbook.get("b", [])
+        asks = orderbook.get("a", [])
+
+        # Calculate price, size, stop loss
+        nearest_ask = float(asks[0][0]) if len(asks) > 0 else 0
+        nearest_bid = float(bids[0][0]) if len(bids) > 0 else 0
+
+        # Calculate hard stop loss
+        if direction == "Long" and nearest_bid > 0:
+            mid_price = nearest_bid
+            stop_loss = round(mid_price * (1 - stop_loss_fail_safe), price_rounding)
+        elif direction != "Long" and nearest_ask > 0:
+            mid_price = nearest_ask
+            stop_loss = round(mid_price * (1 + stop_loss_fail_safe), price_rounding)
+
+        # Calculate quantity
+        if mid_price > 0:
+            raw_quantity = capital / mid_price
+            if qty_step is not None:
+                quantity = round_qty_to_step(raw_quantity, qty_step)
             else:
-                ask_items_list.append(float(level["price"]))
-
-        # Calculate price, size, stop loss and average liquidity
-        if len(ask_items_list) > 0 and len(bid_items_list) > 0:
-
-            # Sort lists
-            ask_items_list.sort()
-            bid_items_list.sort()
-            bid_items_list.reverse()
-
-            # Get nearest ask, nearest bid and orderbook spread
-            nearest_ask = ask_items_list[0]
-            nearest_bid = bid_items_list[0]
-
-            # Calculate hard stop loss
-            if direction == "Long":
-                mid_price = nearest_bid # placing at Bid has high probability of not being cancelled, but may not fill
-                stop_loss = round(mid_price * (1 - stop_loss_fail_safe), price_rounding)
-            else:
-                mid_price = nearest_ask  # placing at Ask has high probability of not being cancelled, but may not fill
-                stop_loss = round(mid_price * (1 + stop_loss_fail_safe), price_rounding)
-
-            # Calculate quantity
-            quantity = round(capital / mid_price, quantity_rounding)
+                quantity = round(raw_quantity)
 
     # Output results
     return (mid_price, stop_loss, quantity)

@@ -2,27 +2,30 @@ from func_position_calls import query_existing_order
 from func_position_calls import get_open_positions
 from func_position_calls import get_active_positions
 from func_calcultions import get_trade_details
-# from config_ws_connect import ws_public
 from config_execution_api import session_public
+from logger_setup import get_logger
+
+logger = get_logger("order_review")
 
 
-# Check order items
+# Check order items (updated for Bybit V5 API)
 def check_order(ticker, order_id, remaining_capital, direction="Long"):
 
     # Get current orderbook
-    orderbook = session_public.orderbook(symbol=ticker)
+    try:
+        orderbook = session_public.get_orderbook(category="linear", symbol=ticker)
+    except Exception as e:
+        logger.error("Failed to get orderbook for %s: %s", ticker, e)
+        return None
 
-    # Return structured orderbook 2
-    if "ret_msg" in orderbook.keys():
-        if orderbook["ret_msg"] != "OK":
-            return
-        else:
-            orderbook = orderbook["result"]
+    # Return structured orderbook
+    if orderbook["retCode"] != 0:
+        return None
 
     # Get latest price
-    mid_price, _, _ = get_trade_details(orderbook)
+    mid_price, _, _ = get_trade_details(orderbook["result"])
 
-    print(mid_price)
+    logger.debug("mid_price for %s: %.6f", ticker, mid_price)
 
     # Get trade details
     order_price, order_quantity, order_status = query_existing_order(ticker, order_id, direction)
@@ -33,9 +36,12 @@ def check_order(ticker, order_id, remaining_capital, direction="Long"):
     # Get active positions
     # active_order_price, active_order_quantity = get_active_positions(ticker)
 
+    # Calculate position value in USDT
+    position_value_usdt = position_quantity * position_price if position_price > 0 else position_quantity * mid_price
+
     # Determine action - trade complete - stop placing orders
-    if position_quantity >= remaining_capital and position_quantity > 0:
-        print(f"position_quantity {position_quantity}", f"remaining_capital {remaining_capital}")
+    if position_value_usdt >= remaining_capital and position_quantity > 0:
+        logger.info("position_qty %.4f @ %.4f = %.2f USDT | target %.2f USDT", position_quantity, position_price, position_value_usdt, remaining_capital)
         return "Trade Complete"
 
     # Determine action - position filled - buy more

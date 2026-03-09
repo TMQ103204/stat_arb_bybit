@@ -8,7 +8,7 @@ def store_price_history(symbols):
     counts = 0
     price_history_dict = {}
     for sym in symbols:
-        symbol_name = sym["name"]
+        symbol_name = sym["symbol"]
         price_history = get_price_klines(symbol_name)
         if len(price_history) > 0:
             price_history_dict[symbol_name] = price_history

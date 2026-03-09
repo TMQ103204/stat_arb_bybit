@@ -30,9 +30,13 @@ if __name__ == "__main__":
 
     # STEP 4 - Plot trends and save for backtesting
     print("Plotting trends...")
-    symbol_1 = "MATICUSDT"
-    symbol_2 = "STXUSDT"
-    with open("1_price_list.json") as json_file:
-        price_data = json.load(json_file)
-        if len(price_data) > 0:
-            plot_trends(symbol_1, symbol_2, price_data)
+    if len(coint_pairs) > 0:
+        symbol_1 = coint_pairs.iloc[0]["sym_1"]
+        symbol_2 = coint_pairs.iloc[0]["sym_2"]
+        print(f"Best cointegrated pair: {symbol_1} vs {symbol_2}")
+        with open("1_price_list.json") as json_file:
+            price_data = json.load(json_file)
+            if len(price_data) > 0:
+                plot_trends(symbol_1, symbol_2, price_data)
+    else:
+        print("No cointegrated pairs found.")

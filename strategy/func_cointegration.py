@@ -25,7 +25,10 @@ def calculate_spread(series_1, series_2, hedge_ratio):
 # Calculate co-integration
 def calculate_cointegration(series_1, series_2):
     coint_flag = 0
-    coint_res = coint(series_1, series_2)
+    try:
+        coint_res = coint(series_1, series_2)
+    except ValueError:
+        return (0, 1, 0, 0, 0, 0)
     coint_t = coint_res[0]
     p_value = coint_res[1]
     critical_value = coint_res[2][1]
@@ -33,7 +36,7 @@ def calculate_cointegration(series_1, series_2):
     hedge_ratio = model.params[0]
     spread = calculate_spread(series_1, series_2, hedge_ratio)
     zero_crossings = len(np.where(np.diff(np.sign(spread)))[0])
-    if p_value < 0.5 and coint_t < critical_value:
+    if p_value < 0.05 and coint_t < critical_value and zero_crossings >= 20:
         coint_flag = 1
     return (coint_flag, round(p_value, 2), round(coint_t, 2), round(critical_value, 2), round(hedge_ratio, 2), zero_crossings)
 
