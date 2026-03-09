@@ -1,7 +1,7 @@
 from config_strategy_api import session
 
 # Minimum 24h turnover in USDT to filter out illiquid symbols
-MIN_TURNOVER_24H = 5_000_000
+MIN_TURNOVER_24H = 500_000
 
 # Get symbols that are tradeable (updated for Bybit V5 API)
 def get_tradeable_symbols():
