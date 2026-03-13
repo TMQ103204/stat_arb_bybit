@@ -38,7 +38,7 @@ def set_leverage(ticker):
 
 
 # Place limit or market order (updated for Bybit V5 API)
-def place_order(ticker, price, quantity, direction, stop_loss):
+def place_order(ticker, price, quantity, direction, stop_loss, force_market=False):
 
     # Set variables
     if direction == "Long":
@@ -46,8 +46,8 @@ def place_order(ticker, price, quantity, direction, stop_loss):
     else:
         side = "Sell"
 
-    # Place limit order
-    if limit_order_basis:
+    # Place limit order (unless a market fill is forced, e.g. when the opposite leg is already filled)
+    if limit_order_basis and not force_market:
         order = session_private.place_order(
             category="linear",
             symbol=ticker,
@@ -78,7 +78,7 @@ def place_order(ticker, price, quantity, direction, stop_loss):
 
 
 # Initialise execution (updated for Bybit V5 API)
-def initialise_order_execution(ticker, direction, capital):
+def initialise_order_execution(ticker, direction, capital, force_market=False):
     try:
         orderbook = session_public.get_orderbook(category="linear", symbol=ticker)
     except Exception as e:
@@ -95,7 +95,7 @@ def initialise_order_execution(ticker, direction, capital):
         mid_price, stop_loss, quantity = get_trade_details(ob_result, direction, capital)
         if quantity > 0:
             try:
-                order = place_order(ticker, mid_price, quantity, direction, stop_loss)
+                order = place_order(ticker, mid_price, quantity, direction, stop_loss, force_market)
                 order_result = get_result_dict(order)
                 if "orderId" in order_result:
                         logger.info("Order placed: %s %s qty=%.6f price=%.6f", direction, ticker, quantity, mid_price)

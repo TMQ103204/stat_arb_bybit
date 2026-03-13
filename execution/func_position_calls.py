@@ -1,35 +1,49 @@
 from config_execution_api import session_private
 from logger_setup import get_logger
 from bybit_response import get_result_list, get_ret_code
+import time
 
 logger = get_logger("position")
 
 # Check for open positions (updated for Bybit V5 API)
-def open_position_confirmation(ticker):
-    try:
-        position = session_private.get_positions(category="linear", symbol=ticker)
-        if get_ret_code(position) == 0:
-            for item in get_result_list(position):
-                if float(item["size"]) > 0:
-                    return True
-    except Exception as e:
-        logger.error("Error checking open position for %s: %s", ticker, e)
-        return True
+def open_position_confirmation(ticker, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            position = session_private.get_positions(category="linear", symbol=ticker)
+            if get_ret_code(position) == 0:
+                for item in get_result_list(position):
+                    if float(item["size"]) > 0:
+                        return True
+            return False  # API call succeeded but no open size — position is not open
+        except Exception as e:
+            logger.error(
+                "Network error checking open position for %s (attempt %d/%d): %s",
+                ticker, attempt + 1, max_retries, e
+            )
+            time.sleep(2)
+    # All retries exhausted — assume position is NOT open to avoid phantom locks
     return False
 
 
 # Check for active positions (updated for Bybit V5 API)
-def active_position_confirmation(ticker):
-    try:
-        active_order = session_private.get_open_orders(
-            category="linear",
-            symbol=ticker
-        )
-        if get_ret_code(active_order) == 0:
-            if len(get_result_list(active_order)) > 0:
-                return True
-    except:
-        return True
+def active_position_confirmation(ticker, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            active_order = session_private.get_open_orders(
+                category="linear",
+                symbol=ticker
+            )
+            if get_ret_code(active_order) == 0:
+                if len(get_result_list(active_order)) > 0:
+                    return True
+            return False  # API call succeeded but no open orders
+        except Exception as e:
+            logger.error(
+                "Network error checking active orders for %s (attempt %d/%d): %s",
+                ticker, attempt + 1, max_retries, e
+            )
+            time.sleep(2)
+    # All retries exhausted — assume no active orders
     return False
 
 

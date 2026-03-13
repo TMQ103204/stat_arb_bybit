@@ -1,15 +1,18 @@
 from config_execution_api import signal_positive_ticker
 from config_execution_api import signal_negative_ticker
 from config_execution_api import signal_trigger_thresh
+from config_execution_api import zscore_stop_loss
 from config_execution_api import tradeable_capital_usdt
 from config_execution_api import limit_order_basis
 from config_execution_api import session_private
 from func_price_calls import get_ticker_trade_liquidity
 from func_get_zscore import get_latest_zscore
 from func_execution_calls import initialise_order_execution
+from func_close_positions import close_all_positions
 from func_order_review import check_order
 from logger_setup import get_logger
 import time
+import concurrent.futures
 
 logger = get_logger("trade_mgmt")
 
@@ -103,24 +106,40 @@ def manage_new_trades(kill_switch):
         retry_short = 0
         is_retry_long = False
         is_retry_short = False
+        force_market_long = False
+        force_market_short = False
         max_retries = 5  # Maximum retry attempts before giving up
         while kill_switch == 0:
 
-            # Place order - long
-            if counts_long == 0:
-                order_long_id = initialise_order_execution(long_ticker, "Long", initial_capital_usdt)
-                counts_long = 1 if order_long_id else 0
-                if not is_retry_long:
-                    remaining_capital_long = remaining_capital_long - initial_capital_usdt
-                is_retry_long = False
+            # Place both legs simultaneously to minimise spread between entry prices
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future_long = None
+                future_short = None
 
-            # Place order - short
-            if counts_short == 0:
-                order_short_id = initialise_order_execution(short_ticker, "Short", initial_capital_usdt)
-                counts_short = 1 if order_short_id else 0
-                if not is_retry_short:
-                    remaining_capital_short = remaining_capital_short - initial_capital_usdt
-                is_retry_short = False
+                if counts_long == 0:
+                    future_long = executor.submit(
+                        initialise_order_execution, long_ticker, "Long", initial_capital_usdt, force_market_long
+                    )
+                if counts_short == 0:
+                    future_short = executor.submit(
+                        initialise_order_execution, short_ticker, "Short", initial_capital_usdt, force_market_short
+                    )
+
+                if future_long is not None:
+                    order_long_id = future_long.result()
+                    counts_long = 1 if order_long_id else 0
+                    if counts_long == 1 and not is_retry_long:
+                        remaining_capital_long -= initial_capital_usdt
+                    is_retry_long = False
+                    force_market_long = False
+
+                if future_short is not None:
+                    order_short_id = future_short.result()
+                    counts_short = 1 if order_short_id else 0
+                    if counts_short == 1 and not is_retry_short:
+                        remaining_capital_short -= initial_capital_usdt
+                    is_retry_short = False
+                    force_market_short = False
 
             # Update signal side
             if zscore > 0:
@@ -132,8 +151,8 @@ def manage_new_trades(kill_switch):
             if not limit_order_basis and counts_long and counts_short:
                 kill_switch = 1
 
-            # Allow for time to register the limit orders
-            time.sleep(3)
+            # Allow time to register the limit orders (reduced to minimise price drift between legs)
+            time.sleep(0.5)
 
             # Check limit orders and ensure z_score is still within range
             latest_new = get_latest_zscore()
@@ -144,6 +163,23 @@ def manage_new_trades(kill_switch):
                 continue
             zscore_new, signal_sign_p_new = latest_new
             zscore_new = _to_float(zscore_new)
+
+            # ── Emergency Z-score stop-loss ─────────────────────────────────────────
+            # If the spread has diverged beyond the configured threshold, close all
+            # positions immediately at market price to cap the loss.
+            if abs(zscore_new) > float(zscore_stop_loss):
+                logger.critical(
+                    "Z-SCORE BREAKDOWN: %.4f exceeds stop-loss threshold %.4f. "
+                    "Cancelling all orders and closing positions at market.",
+                    zscore_new, zscore_stop_loss
+                )
+                session_private.cancel_all_orders(category="linear", symbol=signal_positive_ticker)
+                session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
+                close_all_positions(kill_switch)
+                kill_switch = 1
+                return kill_switch, signal_side
+            # ────────────────────────────────────────────────────────────────────────
+
             if kill_switch == 0:
                 if abs(zscore_new) > float(signal_trigger_thresh) * 0.9 and signal_sign_p_new == signal_sign_positive:
 
@@ -194,6 +230,13 @@ def manage_new_trades(kill_switch):
                         else:
                             counts_long = 0
                             is_retry_long = True
+                            # Opposite leg already filled — escalate to Market Order to close the leg gap
+                            if order_status_short in ("Position Filled", "Trade Complete"):
+                                force_market_long = True
+                                logger.warning(
+                                    "Short leg already filled — forcing Market Order for long retry "
+                                    "to eliminate leg gap."
+                                )
 
                     # If order cancelled for short - try again (with retry limit)
                     if order_status_short == "Try Again":
@@ -207,12 +250,13 @@ def manage_new_trades(kill_switch):
                         else:
                             counts_short = 0
                             is_retry_short = True
-
-                    # If one side is complete but the other keeps failing
-                    if (order_status_long == "Trade Complete" and order_status_short == "Try Again") or \
-                       (order_status_short == "Trade Complete" and order_status_long == "Try Again"):
-                        logger.warning("One side complete, other side keeps failing. Stopping to avoid infinite loop.")
-                        kill_switch = 1
+                            # Opposite leg already filled — escalate to Market Order to close the leg gap
+                            if order_status_long in ("Position Filled", "Trade Complete"):
+                                force_market_short = True
+                                logger.warning(
+                                    "Long leg already filled — forcing Market Order for short retry "
+                                    "to eliminate leg gap."
+                                )
 
                 else:
                     # Cancel all active orders
