@@ -1,5 +1,6 @@
 from config_execution_api import session_private
 from logger_setup import get_logger
+from bybit_response import get_result_list, get_ret_code
 
 logger = get_logger("position")
 
@@ -7,8 +8,8 @@ logger = get_logger("position")
 def open_position_confirmation(ticker):
     try:
         position = session_private.get_positions(category="linear", symbol=ticker)
-        if position["retCode"] == 0:
-            for item in position["result"]["list"]:
+        if get_ret_code(position) == 0:
+            for item in get_result_list(position):
                 if float(item["size"]) > 0:
                     return True
     except Exception as e:
@@ -24,8 +25,8 @@ def active_position_confirmation(ticker):
             category="linear",
             symbol=ticker
         )
-        if active_order["retCode"] == 0:
-            if len(active_order["result"]["list"]) > 0:
+        if get_ret_code(active_order) == 0:
+            if len(get_result_list(active_order)) > 0:
                 return True
     except:
         return True
@@ -42,8 +43,8 @@ def get_open_positions(ticker, direction="Long"):
     target_side = "Buy" if direction == "Long" else "Sell"
 
     # Construct a response
-    if position["retCode"] == 0:
-        for pos in position["result"]["list"]:
+    if get_ret_code(position) == 0:
+        for pos in get_result_list(position):
             if pos["side"] == target_side and float(pos["size"]) > 0:
                 order_price = float(pos["avgPrice"])
                 order_quantity = float(pos["size"])
@@ -61,10 +62,11 @@ def get_active_positions(ticker):
     )
 
     # Construct a response
-    if active_order["retCode"] == 0:
-        if len(active_order["result"]["list"]) > 0:
-            order_price = float(active_order["result"]["list"][0]["price"])
-            order_quantity = float(active_order["result"]["list"][0]["qty"])
+    order_list = get_result_list(active_order)
+    if get_ret_code(active_order) == 0:
+        if len(order_list) > 0:
+            order_price = float(order_list[0]["price"])
+            order_quantity = float(order_list[0]["qty"])
             return order_price, order_quantity
     return (0, 0)
 
@@ -79,8 +81,9 @@ def query_existing_order(ticker, order_id, direction):
             symbol=ticker,
             orderId=order_id
         )
-        if order["retCode"] == 0 and len(order["result"]["list"]) > 0:
-            item = order["result"]["list"][0]
+        order_list = get_result_list(order)
+        if get_ret_code(order) == 0 and len(order_list) > 0:
+            item = order_list[0]
             return float(item["price"]), float(item["qty"]), item["orderStatus"]
     except:
         pass
@@ -92,8 +95,9 @@ def query_existing_order(ticker, order_id, direction):
             symbol=ticker,
             orderId=order_id
         )
-        if order["retCode"] == 0 and len(order["result"]["list"]) > 0:
-            item = order["result"]["list"][0]
+        order_list = get_result_list(order)
+        if get_ret_code(order) == 0 and len(order_list) > 0:
+            item = order_list[0]
             return float(item["price"]), float(item["qty"]), item["orderStatus"]
     except:
         pass

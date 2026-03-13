@@ -13,6 +13,19 @@ import time
 
 logger = get_logger("trade_mgmt")
 
+
+def _to_float(value) -> float:
+    if isinstance(value, bool):
+        return float(int(value))
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return 0.0
+    return 0.0
+
 # Manage new trade assessment and order placing
 def manage_new_trades(kill_switch):
 
@@ -23,11 +36,15 @@ def manage_new_trades(kill_switch):
     hot = False
 
     # Get and save the latest z-score
-    zscore, signal_sign_positive = get_latest_zscore()
+    latest = get_latest_zscore()
+    if latest is None:
+        return kill_switch, signal_side
+    zscore, signal_sign_positive = latest
+    zscore = _to_float(zscore)
 
     # Switch to hot if meets signal threshold
     # Note: You can add in coint-flag check too if you want extra vigilence
-    if abs(zscore) > signal_trigger_thresh:
+    if abs(zscore) > float(signal_trigger_thresh):
 
         # Active hot trigger
         hot = True
@@ -84,6 +101,8 @@ def manage_new_trades(kill_switch):
         counts_short = 0
         retry_long = 0
         retry_short = 0
+        is_retry_long = False
+        is_retry_short = False
         max_retries = 5  # Maximum retry attempts before giving up
         while kill_switch == 0:
 
@@ -91,13 +110,17 @@ def manage_new_trades(kill_switch):
             if counts_long == 0:
                 order_long_id = initialise_order_execution(long_ticker, "Long", initial_capital_usdt)
                 counts_long = 1 if order_long_id else 0
-                remaining_capital_long = remaining_capital_long - initial_capital_usdt
+                if not is_retry_long:
+                    remaining_capital_long = remaining_capital_long - initial_capital_usdt
+                is_retry_long = False
 
             # Place order - short
             if counts_short == 0:
                 order_short_id = initialise_order_execution(short_ticker, "Short", initial_capital_usdt)
                 counts_short = 1 if order_short_id else 0
-                remaining_capital_short = remaining_capital_short - initial_capital_usdt
+                if not is_retry_short:
+                    remaining_capital_short = remaining_capital_short - initial_capital_usdt
+                is_retry_short = False
 
             # Update signal side
             if zscore > 0:
@@ -113,9 +136,16 @@ def manage_new_trades(kill_switch):
             time.sleep(3)
 
             # Check limit orders and ensure z_score is still within range
-            zscore_new, signal_sign_p_new = get_latest_zscore()
+            latest_new = get_latest_zscore()
+            if latest_new is None:
+                session_private.cancel_all_orders(category="linear", symbol=signal_positive_ticker)
+                session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
+                kill_switch = 1
+                continue
+            zscore_new, signal_sign_p_new = latest_new
+            zscore_new = _to_float(zscore_new)
             if kill_switch == 0:
-                if abs(zscore_new) > signal_trigger_thresh * 0.9 and signal_sign_p_new == signal_sign_positive:
+                if abs(zscore_new) > float(signal_trigger_thresh) * 0.9 and signal_sign_p_new == signal_sign_positive:
 
                     # Check long order status
                     if counts_long == 1:
@@ -127,12 +157,18 @@ def manage_new_trades(kill_switch):
 
                     logger.info("Long: %s | Short: %s | zscore: %.4f", order_status_long, order_status_short, zscore_new)
 
-                    # If orders still active, do nothing
-                    if order_status_long == "Order Active" or order_status_short == "Order Active":
+                    # Determine if each side is still pending
+                    waiting_states = ("Order Active", "Partial Fill")
+                    long_waiting = order_status_long in waiting_states
+                    short_waiting = order_status_short in waiting_states
+
+                    # If both sides still pending, do nothing
+                    if long_waiting and short_waiting:
                         continue
 
-                    # If orders partial fill, do nothing
-                    if order_status_long == "Partial Fill" or order_status_short == "Partial Fill":
+                    # If one side pending and the other doesn't need retry, wait
+                    if (long_waiting and order_status_short != "Try Again") or \
+                       (short_waiting and order_status_long != "Try Again"):
                         continue
 
                     # If orders trade complete, do nothing - stop opening trades
@@ -143,6 +179,8 @@ def manage_new_trades(kill_switch):
                     if order_status_long == "Position Filled" and order_status_short == "Position Filled":
                         counts_long = 0
                         counts_short = 0
+                        retry_long = 0
+                        retry_short = 0
 
                     # If order cancelled for long - try again (with retry limit)
                     if order_status_long == "Try Again":
@@ -155,6 +193,7 @@ def manage_new_trades(kill_switch):
                             kill_switch = 1
                         else:
                             counts_long = 0
+                            is_retry_long = True
 
                     # If order cancelled for short - try again (with retry limit)
                     if order_status_short == "Try Again":
@@ -167,6 +206,7 @@ def manage_new_trades(kill_switch):
                             kill_switch = 1
                         else:
                             counts_short = 0
+                            is_retry_short = True
 
                     # If one side is complete but the other keeps failing
                     if (order_status_long == "Trade Complete" and order_status_short == "Try Again") or \

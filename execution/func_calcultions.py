@@ -1,6 +1,7 @@
 from config_execution_api import stop_loss_fail_safe
 from config_execution_api import session_public
 from logger_setup import get_logger
+from bybit_response import get_result_list
 import math
 
 logger = get_logger("calculations")
@@ -14,7 +15,10 @@ def _get_instrument_info(symbol):
         return _instrument_cache[symbol]
     try:
         info = session_public.get_instruments_info(category="linear", symbol=symbol)
-        item = info["result"]["list"][0]
+        info_list = get_result_list(info)
+        if len(info_list) == 0:
+            return (None, None)
+        item = info_list[0]
         price_filter = item["priceFilter"]
         lot_filter = item["lotSizeFilter"]
         tick_size = float(price_filter["tickSize"])

@@ -29,13 +29,13 @@ def calculate_cointegration(series_1, series_2):
         coint_res = coint(series_1, series_2)
     except ValueError:
         return (0, 1, 0, 0, 0, 0)
-    coint_t = coint_res[0]
-    p_value = coint_res[1]
-    critical_value = coint_res[2][1]
+    coint_t = float(coint_res[0])
+    p_value = float(coint_res[1])
+    critical_value = float(coint_res[2][1])
     model = sm.OLS(series_1, series_2).fit()
-    hedge_ratio = model.params[0]
+    hedge_ratio = float(model.params[0])
     spread = calculate_spread(series_1, series_2, hedge_ratio)
-    zero_crossings = len(np.where(np.diff(np.sign(spread)))[0])
+    zero_crossings = int(len(np.where(np.diff(np.sign(spread)))[0]))
     if p_value < 0.05 and coint_t < critical_value and zero_crossings >= 20:
         coint_flag = 1
     return (coint_flag, round(p_value, 2), round(coint_t, 2), round(critical_value, 2), round(hedge_ratio, 2), zero_crossings)
@@ -45,9 +45,10 @@ def calculate_cointegration(series_1, series_2):
 def extract_close_prices(prices):
     close_prices = []
     for price_values in prices:
-        if math.isnan(price_values["close"]):
+        close_price = float(price_values["close"])
+        if math.isnan(close_price):
             return []
-        close_prices.append(price_values["close"])
+        close_prices.append(close_price)
     return close_prices
 
 
@@ -67,7 +68,7 @@ def get_cointegrated_pairs(prices):
                 sorted_characters = sorted(sym_1 + sym_2)
                 unique = "".join(sorted_characters)
                 if unique in included_list:
-                    break
+                    continue
 
                 # Get close prices
                 series_1 = extract_close_prices(prices[sym_1])
@@ -89,6 +90,7 @@ def get_cointegrated_pairs(prices):
 
     # Output results
     df_coint = pd.DataFrame(coint_pair_list)
-    df_coint = df_coint.sort_values("zero_crossings", ascending=False)
+    if not df_coint.empty:
+        df_coint = df_coint.sort_values("zero_crossings", ascending=False)
     df_coint.to_csv("2_cointegrated_pairs.csv")
     return df_coint

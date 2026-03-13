@@ -3,6 +3,7 @@ from config_execution_api import limit_order_basis
 from config_execution_api import session_public
 from func_calcultions import get_trade_details
 from logger_setup import get_logger
+from bybit_response import get_result_dict, get_ret_code
 
 logger = get_logger("execution")
 
@@ -85,20 +86,20 @@ def initialise_order_execution(ticker, direction, capital):
         return 0
 
     # Return structured orderbook
-    if not isinstance(orderbook, dict) or orderbook.get("retCode") != 0:
+    if get_ret_code(orderbook) != 0:
         return 0
 
-    ob_result = orderbook.get("result")
+    ob_result = get_result_dict(orderbook)
 
     if ob_result:
         mid_price, stop_loss, quantity = get_trade_details(ob_result, direction, capital)
         if quantity > 0:
             try:
                 order = place_order(ticker, mid_price, quantity, direction, stop_loss)
-                if isinstance(order, dict) and "result" in order:
-                    if "orderId" in order["result"]:
+                order_result = get_result_dict(order)
+                if "orderId" in order_result:
                         logger.info("Order placed: %s %s qty=%.6f price=%.6f", direction, ticker, quantity, mid_price)
-                        return order["result"]["orderId"]
+                        return order_result["orderId"]
             except Exception as e:
                 logger.error("Failed to place order %s %s: %s", direction, ticker, e)
     return 0

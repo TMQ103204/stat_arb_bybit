@@ -1,0 +1,7 @@
+{
+  "extraPaths": [
+    "strategy",
+    "execution"
+  ],
+  "reportMissingModuleSource": false
+}

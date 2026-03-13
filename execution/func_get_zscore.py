@@ -5,9 +5,23 @@ from func_calcultions import get_trade_details
 from func_price_calls import get_latest_klines
 from func_stats import calculate_metrics
 from logger_setup import get_logger
+from bybit_response import get_result_dict, get_ret_code
 import time
 
 logger = get_logger("zscore")
+
+
+def _to_float(value) -> float:
+    if isinstance(value, bool):
+        return float(int(value))
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return 0.0
+    return 0.0
 
 # Get latest z-score (updated for Bybit V5 API)
 def get_latest_zscore():
@@ -20,10 +34,10 @@ def get_latest_zscore():
         return None
 
     # Return structured orderbook 1
-    if orderbook_1["retCode"] != 0:
+    if get_ret_code(orderbook_1) != 0:
         return None
 
-    mid_price_1, _, _, = get_trade_details(orderbook_1["result"])
+    mid_price_1, _, _, = get_trade_details(get_result_dict(orderbook_1))
     time.sleep(0.5) # Using to prevent overwhelming REST API with requests and getting blocked
     try:
         orderbook_2 = session_public.get_orderbook(category="linear", symbol=ticker_2)
@@ -32,10 +46,10 @@ def get_latest_zscore():
         return None
 
     # Return structured orderbook 2
-    if orderbook_2["retCode"] != 0:
+    if get_ret_code(orderbook_2) != 0:
         return None
 
-    mid_price_2, _, _, = get_trade_details(orderbook_2["result"])
+    mid_price_2, _, _, = get_trade_details(get_result_dict(orderbook_2))
     time.sleep(0.5) # Using to prevent overwhelming REST API with requests and getting blocked
 
     # Get latest price history
@@ -52,7 +66,9 @@ def get_latest_zscore():
 
         # Get latest zscore
         _, zscore_list = calculate_metrics(series_1, series_2)
-        zscore = zscore_list[-1]
+        if len(zscore_list) == 0:
+            return None
+        zscore = _to_float(zscore_list[-1])
         if zscore > 0:
             signal_sign_positive = True
         else:
@@ -62,4 +78,4 @@ def get_latest_zscore():
         return (zscore, signal_sign_positive)
 
     # Return output if not true
-    return
+    return None

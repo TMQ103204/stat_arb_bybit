@@ -5,6 +5,7 @@ from config_execution_api import timeframe
 from config_execution_api import kline_limit
 from func_calcultions import extract_close_prices
 from logger_setup import get_logger
+from bybit_response import get_result_list, get_ret_code
 import datetime
 import time
 
@@ -27,29 +28,33 @@ def get_ticker_trade_liquidity(ticker):
 
     # Get the list for calculating the average liquidity
     quantity_list = []
-    if trades["retCode"] == 0:
-        for trade in trades["result"]["list"]:
+    trades_list = get_result_list(trades)
+    if get_ret_code(trades) == 0:
+        for trade in trades_list:
             quantity_list.append(float(trade["size"]))
 
     # Return output
     if len(quantity_list) > 0:
         avg_liq = sum(quantity_list) / len(quantity_list)
-        res_trades_price = float(trades["result"]["list"][0]["price"])
+        res_trades_price = float(trades_list[0]["price"])
         return (avg_liq, res_trades_price)
     return (0, 0)
 
 
 # Get start times
 def get_timestamps():
-    time_start_date = 0
-    time_next_date = 0
     now = datetime.datetime.now()
+    time_start_date = now
+    time_next_date = now
     if timeframe == 60:
         time_start_date = now - datetime.timedelta(hours=kline_limit)
         time_next_date = now + datetime.timedelta(seconds=30)
-    if timeframe == "D":
+    elif timeframe == "D":
         time_start_date = now - datetime.timedelta(days=kline_limit)
         time_next_date = now + datetime.timedelta(minutes=1)
+    else:
+        time_start_date = now - datetime.timedelta(hours=kline_limit)
+        time_next_date = now + datetime.timedelta(seconds=30)
     time_start_seconds = int(time_start_date.timestamp())
     time_now_seconds = int(now.timestamp())
     time_next_seconds = int(time_next_date.timestamp())
@@ -77,10 +82,10 @@ def get_price_klines(ticker):
     time.sleep(0.1)
 
     # Return prices output - V5 returns data in result.list (newest first)
-    if prices["retCode"] != 0:
+    if get_ret_code(prices) != 0:
         return []
 
-    result_list = prices["result"]["list"]
+    result_list = get_result_list(prices)
     if len(result_list) != kline_limit:
         return []
 

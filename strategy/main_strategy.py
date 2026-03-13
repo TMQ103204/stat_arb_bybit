@@ -1,6 +1,13 @@
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
+import os
+import sys
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from func_get_symbols import get_tradeable_symbols
 from func_prices_json import store_price_history
 from func_cointegration import get_cointegrated_pairs
@@ -11,6 +18,8 @@ import json
 
 """STRATEGY CODE"""
 if __name__ == "__main__":
+
+    coint_pairs = pd.DataFrame()
 
     # STEP 1 - Get list of symbols
     print("Getting symbols...")
@@ -30,7 +39,7 @@ if __name__ == "__main__":
 
     # STEP 4 - Plot trends and save for backtesting
     print("Plotting trends...")
-    if len(coint_pairs) > 0:
+    if not coint_pairs.empty:
         symbol_1 = coint_pairs.iloc[0]["sym_1"]
         symbol_2 = coint_pairs.iloc[0]["sym_2"]
         print(f"Best cointegrated pair: {symbol_1} vs {symbol_2}")

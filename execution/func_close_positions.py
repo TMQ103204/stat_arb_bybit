@@ -2,6 +2,7 @@ from config_execution_api import signal_positive_ticker
 from config_execution_api import signal_negative_ticker
 from config_execution_api import session_private
 from logger_setup import get_logger
+from bybit_response import get_result_list, get_ret_code
 
 logger = get_logger("close_pos")
 
@@ -14,9 +15,8 @@ def get_position_info(ticker):
 
     # Extract position info
     position_response = session_private.get_positions(category="linear", symbol=ticker)
-    position = dict(position_response) if not isinstance(position_response, dict) else position_response
-    if position["retCode"] == 0:
-        for pos in position["result"]["list"]:
+    if get_ret_code(position_response) == 0:
+        for pos in get_result_list(position_response):
             if float(pos["size"]) > 0:
                 size = float(pos["size"])
                 side = pos["side"]

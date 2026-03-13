@@ -1,4 +1,5 @@
 from config_strategy_api import session
+from bybit_response import get_result_list, get_ret_code
 
 # Minimum 24h turnover in USDT to filter out illiquid symbols
 MIN_TURNOVER_24H = 500_000
@@ -9,16 +10,16 @@ def get_tradeable_symbols():
     # Get available USDT linear symbols
     valid_symbols = set()
     symbols = session.get_instruments_info(category="linear")
-    if symbols["retCode"] == 0:
-        for symbol in symbols["result"]["list"]:
+    if get_ret_code(symbols) == 0:
+        for symbol in get_result_list(symbols):
             if symbol["quoteCoin"] == "USDT" and symbol["status"] == "Trading":
                 valid_symbols.add(symbol["symbol"])
 
     # Get 24h ticker data and filter by turnover
     sym_list = []
     tickers = session.get_tickers(category="linear")
-    if tickers["retCode"] == 0:
-        for ticker in tickers["result"]["list"]:
+    if get_ret_code(tickers) == 0:
+        for ticker in get_result_list(tickers):
             if ticker["symbol"] in valid_symbols:
                 turnover_24h = float(ticker.get("turnover24h", "0"))
                 if turnover_24h >= MIN_TURNOVER_24H:

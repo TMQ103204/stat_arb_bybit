@@ -4,6 +4,7 @@ from func_position_calls import get_active_positions
 from func_calcultions import get_trade_details
 from config_execution_api import session_public
 from logger_setup import get_logger
+from bybit_response import get_result_dict, get_ret_code
 
 logger = get_logger("order_review")
 
@@ -19,11 +20,11 @@ def check_order(ticker, order_id, remaining_capital, direction="Long"):
         return None
 
     # Return structured orderbook
-    if orderbook["retCode"] != 0:
+    if get_ret_code(orderbook) != 0:
         return None
 
     # Get latest price
-    mid_price, _, _ = get_trade_details(orderbook["result"])
+    mid_price, _, _ = get_trade_details(get_result_dict(orderbook))
 
     logger.debug("mid_price for %s: %.6f", ticker, mid_price)
 

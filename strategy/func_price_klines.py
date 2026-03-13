@@ -7,21 +7,26 @@
 from config_strategy_api import session
 from config_strategy_api import timeframe
 from config_strategy_api import kline_limit
+from bybit_response import get_result_list, get_ret_code
 import datetime
 import time
 
-# Get start times
-time_start_date = 0
-if timeframe == 60:
-    time_start_date = datetime.datetime.now() - datetime.timedelta(hours=kline_limit)
-if timeframe == "D":
-    time_start_date = datetime.datetime.now() - datetime.timedelta(days=kline_limit)
-time_start_seconds = int(time_start_date.timestamp())
+def _get_time_start_seconds() -> int:
+    now = datetime.datetime.now()
+    if timeframe == 60:
+        start_time = now - datetime.timedelta(hours=kline_limit)
+    elif timeframe == "D":
+        start_time = now - datetime.timedelta(days=kline_limit)
+    else:
+        # Fallback to hours when timeframe is unexpected.
+        start_time = now - datetime.timedelta(hours=kline_limit)
+    return int(start_time.timestamp())
 
 # Get historical prices (klines) - updated for Bybit V5 API
 def get_price_klines(symbol):
 
     # Get prices (V5 uses start in milliseconds)
+    time_start_seconds = _get_time_start_seconds()
     prices = session.get_mark_price_kline(
         category="linear",
         symbol=symbol,
@@ -34,10 +39,10 @@ def get_price_klines(symbol):
     time.sleep(0.1)
 
     # Return output - V5 returns data in result.list (newest first)
-    if prices["retCode"] != 0:
+    if get_ret_code(prices) != 0:
         return []
 
-    result_list = prices["result"]["list"]
+    result_list = get_result_list(prices)
     if len(result_list) != kline_limit:
         return []
 

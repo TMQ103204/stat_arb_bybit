@@ -2,6 +2,13 @@
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
+import os
+import sys
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 # General Imports
 from config_execution_api import signal_positive_ticker
 from config_execution_api import signal_negative_ticker
