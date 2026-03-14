@@ -2,3 +2,9 @@ venv
 *pycache*
 .env
 *.log
+
+# Generated data files (real copies live in strategy/ and execution/)
+1_price_list.json
+2_cointegrated_pairs.csv
+3_backtest_file.csv
+status.json
