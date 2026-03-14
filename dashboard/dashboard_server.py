@@ -194,10 +194,11 @@ def run_strategy():
         if strategy_process and strategy_process.poll() is None:
             return jsonify({"error": "Strategy is already running"}), 409
         strategy_output = ["▶ Starting strategy pipeline..."]
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     proc = subprocess.Popen(
-        [sys.executable, str(STRATEGY_DIR / "main_strategy.py")],
+        [sys.executable, "-u", str(STRATEGY_DIR / "main_strategy.py")],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, cwd=str(STRATEGY_DIR),
+        text=True, cwd=str(STRATEGY_DIR), env=env,
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
     )
     strategy_process = proc
@@ -226,10 +227,11 @@ def start_execution():
         if execution_process and execution_process.poll() is None:
             return jsonify({"error": "Execution bot is already running"}), 409
         execution_output = ["▶ Starting execution bot..."]
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     proc = subprocess.Popen(
-        [sys.executable, str(EXECUTION_DIR / "main_execution.py")],
+        [sys.executable, "-u", str(EXECUTION_DIR / "main_execution.py")],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, cwd=str(EXECUTION_DIR),
+        text=True, cwd=str(EXECUTION_DIR), env=env,
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
     )
     execution_process = proc
