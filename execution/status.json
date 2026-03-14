@@ -1,4 +1,4 @@
 {
-    "message": "Managing new trades...",
-    "checks": "[False, False, False, False]"
+    "message": "Initial checks made...",
+    "checks": "[True, False, False, False]"
 }

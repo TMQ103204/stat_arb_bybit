@@ -281,7 +281,10 @@ async function loadBacktest() {
         labels,
         datasets: [
           { label: 'Spread', data: spreadData, borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.1)', borderWidth: 1.5, pointRadius: 0, fill: true, yAxisID: 'y' },
-          { label: 'Z-Score', data: zscoreData, borderColor: '#06b6d4', borderWidth: 1.5, pointRadius: 0, yAxisID: 'y1' },
+          { label: 'Z-Score', data: zscoreData, borderColor: '#06b6d4', borderWidth: 2, pointRadius: 0, yAxisID: 'y1', tension: 0.1 },
+          { label: 'Mean (0)', data: data.map(() => 0), borderColor: 'rgba(255,255,255,0.3)', borderWidth: 1, pointRadius: 0, borderDash: [5, 5], yAxisID: 'y1' },
+          { label: 'Upper Band (+2)', data: data.map(() => 2), borderColor: 'rgba(239,68,68,0.5)', borderWidth: 1, pointRadius: 0, borderDash: [3, 4], yAxisID: 'y1' },
+          { label: 'Lower Band (-2)', data: data.map(() => -2), borderColor: 'rgba(16,185,129,0.5)', borderWidth: 1, pointRadius: 0, borderDash: [3, 4], yAxisID: 'y1' },
         ],
       },
       options: {
