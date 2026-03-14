@@ -1,79 +1,78 @@
-# Steps
+# StatArb Dashboard – Bybit 🚀
 
-Steps below.
+A professional, ultra-premium Statistical Arbitrage Trading Dashboard for Bybit. This project offers a robust backend for running complex quantitative trading strategies, execution logic, and an advanced real-time frontend dashboard.
 
-Important: Ensure that you have your ByBit API Key and Secret up dated on the config_execution_api.py file once downloaded.
+![Dashboard Preview](docs/dashboard_assets/preview.jpg) *(Imagine an ultra-premium dark theme dashboard here)*
 
-## Step 1
+## Architecture 🏛️
 
-Clone the repository
+The system uses a **Hybrid Architecture**:
+- **Frontend**: A static HTML/CSS/JS dashboard, locally hosted, designed with top-tier glassmorphism and real-time polling mechanisms.
+- **Backend**: A local API server (`dashboard_server.py`) powered by Flask, handling all interaction with your file system (strategy config, execution bot running, data reads/writes).
+- **Core Engine**: Python scripts in `strategy/` (mining statistically cointegrated pairs) and `execution/` (actively managing orders and stop-losses on Bybit via API).
 
-```shell
-git clone https://github.com/CryptoWizardsNet/stat-arb-bybit.git statarb
+## Setup & Installation ⚙️
+
+### 1. Requirements
+
+- Python 3.9+
+- Bybit Account with API Keys
+
+### 2. Initialization
+
+Clone the repo and navigate into it:
+```bash
+git clone https://github.com/Tumiqa/stat_arb_bybit.git
+cd stat_arb_bybit
 ```
 
-Update your API details from ByBit on config_execution_api.py
+Create and activate a virtual environment:
 
-## Step 2
-
-Change directory
-
-```shell
-cd statarb
+**Windows:**
+```cmd
+python -m venv venv
+venv\Scripts\activate
 ```
 
-## Step 3
-
-Create Python virtual environment
-
-```shell
-pyhton3 -m venv venv
-```
-
-Activate environment for Mac
-
-```shell
+**Mac/Linux:**
+```bash
+python3 -m venv venv
 source venv/bin/activate
 ```
 
-Activate environment for Windows
+### 3. Install Dependencies
 
-```shell
-source venv\Scripts\activate
+```bash
+pip install -r requirements.txt
 ```
 
-## Step 4
+### 4. Configuration
 
-Install from requirements.txt
+Open `execution/config_execution_api.py` and input your Bybit API keys. **Never commit your keys to GitHub.**
 
-```shell
-pip3 install -r requirements.txt
-```
+## Running the Dashboard 🎯
 
-or if that does not work, install as follows
+You no longer need to run the `.py` files manually for the workflow. The dashboard acts as your master control panel.
 
-```shell
-pip3 install pybit==2.4.1 pandas statsmodels
-```
+1. **Start the Local Server:**
+   ```bash
+   python dashboard/dashboard_server.py
+   ```
+   *The server will run on `http://localhost:5000`.*
 
-## Step 5
+2. **Open the Dashboard:**
+   Open your browser and navigate to `http://localhost:5000`. 
 
-Change directory and run a file. E.g.
+*(Do not use GitHub Pages for running the dashboard. The dashboard requires real-time access to the local Python subprocesses and CSV/JSON output data!)*
 
-```shell
-cd strategy
-```
+## Features ✨
 
-```shell
-python3 main_strategy.py
-```
+- **Real-Time Log Streaming**: Watch exactly what the strategy and execution bot are doing without touching the terminal.
+- **Liquidity Filters**: Filter out low-volume pairs dynamically (`MIN_TURNOVER_24H`).
+- **Auto-Sync Execution**: When the pipeline finishes calculating cointegration, the best performing pair is automatically synced into the execution config.
+- **Backtest Visualization**: Instantly view z-score mean reversions mapped on interactive charts.
+- **1-Click Git Deploy**: Manage code pushes right from the UI.
+- **Ultra-Premium UI**: Fully responsive, dark-mode focused, glassmorphic layout engineered for professional trading setups.
 
-or
-
-```shell
-cd execution
-```
-
-```shell
-python3 main_execution.py
-```
+---
+*Disclaimer: Use live mode trading at your own risk. Always thoroughly test strategies in Demo before committing real capital.*
