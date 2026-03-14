@@ -21,7 +21,7 @@ from flask_cors import CORS
 BASE_DIR = Path(__file__).resolve().parent.parent  # project root
 STRATEGY_DIR = BASE_DIR / "strategy"
 EXECUTION_DIR = BASE_DIR / "execution"
-DASHBOARD_DIR = BASE_DIR / "dashboard"
+DASHBOARD_DIR = BASE_DIR / "docs"
 
 STRATEGY_CONFIG = STRATEGY_DIR / "config_strategy_api.py"
 EXECUTION_CONFIG = EXECUTION_DIR / "config_execution_api.py"
