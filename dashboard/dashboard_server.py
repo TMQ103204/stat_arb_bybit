@@ -25,6 +25,7 @@ DASHBOARD_DIR = BASE_DIR / "docs"
 
 STRATEGY_CONFIG = STRATEGY_DIR / "config_strategy_api.py"
 EXECUTION_CONFIG = EXECUTION_DIR / "config_execution_api.py"
+SYMBOLS_FILE = STRATEGY_DIR / "func_get_symbols.py"
 COINTEGRATED_CSV = BASE_DIR / "2_cointegrated_pairs.csv"
 BACKTEST_CSV = BASE_DIR / "3_backtest_file.csv"
 STATUS_JSON = EXECUTION_DIR / "status.json"
@@ -49,32 +50,42 @@ execution_lock = threading.Lock()
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def parse_strategy_config():
-    """Parse config_strategy_api.py and extract key parameters."""
+    """Parse config_strategy_api.py and func_get_symbols.py for key parameters."""
     content = STRATEGY_CONFIG.read_text(encoding="utf-8")
     config = {}
-    # mode
     m = re.search(r'^mode\s*=\s*["\'](\w+)["\']', content, re.MULTILINE)
     config["mode"] = m.group(1) if m else "demo"
-    # timeframe
     m = re.search(r'^timeframe\s*=\s*(\d+)', content, re.MULTILINE)
     config["timeframe"] = int(m.group(1)) if m else 60
-    # kline_limit
     m = re.search(r'^kline_limit\s*=\s*(\d+)', content, re.MULTILINE)
     config["kline_limit"] = int(m.group(1)) if m else 200
-    # z_score_window
     m = re.search(r'^z_score_window\s*=\s*(\d+)', content, re.MULTILINE)
     config["z_score_window"] = int(m.group(1)) if m else 21
+    # Liquidity from func_get_symbols.py
+    if SYMBOLS_FILE.exists():
+        sym_content = SYMBOLS_FILE.read_text(encoding="utf-8")
+        m = re.search(r'^MIN_TURNOVER_24H\s*=\s*([\d_]+)', sym_content, re.MULTILINE)
+        config["min_turnover_24h"] = int(m.group(1).replace("_", "")) if m else 2000000
+    else:
+        config["min_turnover_24h"] = 2000000
     return config
 
 
 def write_strategy_config(config):
-    """Rewrite config_strategy_api.py with updated values."""
+    """Rewrite config_strategy_api.py and func_get_symbols.py with updated values."""
     content = STRATEGY_CONFIG.read_text(encoding="utf-8")
     content = re.sub(r'^mode\s*=\s*["\'](\w+)["\']', f'mode = "{config["mode"]}"', content, flags=re.MULTILINE)
     content = re.sub(r'^timeframe\s*=\s*\d+', f'timeframe = {config["timeframe"]}', content, flags=re.MULTILINE)
     content = re.sub(r'^kline_limit\s*=\s*\d+', f'kline_limit = {config["kline_limit"]}', content, flags=re.MULTILINE)
     content = re.sub(r'^z_score_window\s*=\s*\d+', f'z_score_window = {config["z_score_window"]}', content, flags=re.MULTILINE)
     STRATEGY_CONFIG.write_text(content, encoding="utf-8")
+    # Write liquidity to func_get_symbols.py
+    if "min_turnover_24h" in config and SYMBOLS_FILE.exists():
+        sym_content = SYMBOLS_FILE.read_text(encoding="utf-8")
+        turnover = int(config["min_turnover_24h"])
+        sym_content = re.sub(r'^MIN_TURNOVER_24H\s*=\s*[\d_]+',
+                             f'MIN_TURNOVER_24H = {turnover:_}', sym_content, flags=re.MULTILINE)
+        SYMBOLS_FILE.write_text(sym_content, encoding="utf-8")
 
 
 def parse_execution_config():

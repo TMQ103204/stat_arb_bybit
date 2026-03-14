@@ -92,6 +92,7 @@ async function loadStrategyConfig() {
     document.getElementById('s-timeframe').value = cfg.timeframe;
     document.getElementById('s-kline').value = cfg.kline_limit;
     document.getElementById('s-zscore-win').value = cfg.z_score_window;
+    document.getElementById('s-liquidity').value = cfg.min_turnover_24h || 2000000;
   } catch(e) { /* offline */ }
 }
 
@@ -101,6 +102,7 @@ async function saveStrategyConfig() {
     timeframe: parseInt(document.getElementById('s-timeframe').value),
     kline_limit: parseInt(document.getElementById('s-kline').value),
     z_score_window: parseInt(document.getElementById('s-zscore-win').value),
+    min_turnover_24h: parseInt(document.getElementById('s-liquidity').value),
   };
   try {
     const res = await api('/api/config/strategy', { method: 'POST', body: data });
@@ -176,8 +178,9 @@ function startStrategyPolling() {
         clearInterval(strategyPolling); strategyPolling = null;
         const btn = document.getElementById('btn-run-strategy');
         btn.disabled = false; btn.innerHTML = '▶ Run Strategy';
-        toast('Strategy pipeline finished', 'success');
-        loadPairs(); loadBacktest();
+        toast('Strategy pipeline finished ✓ Auto-syncing...', 'success');
+        // Auto-sync: reload pairs, backtest, and auto-fill top pair
+        await syncAfterStrategy();
       }
     } catch(e) { /* offline */ }
   }, 1500);
@@ -186,6 +189,23 @@ function startStrategyPolling() {
 // ═══════════════════════════════════════════════════════════════════
 // PAIRS TABLE
 // ═══════════════════════════════════════════════════════════════════
+
+// Auto-sync after strategy: load pairs + backtest + fill top pair into exec config
+async function syncAfterStrategy() {
+  await loadPairs();
+  await loadBacktest();
+  // Auto-fill top pair into execution config
+  if (pairsData.length > 0) {
+    const top = pairsData[0]; // already sorted by zero_crossings desc from loadPairs
+    const sym1 = top.sym_1;
+    const sym2 = top.sym_2;
+    document.getElementById('e-ticker1').value = sym1;
+    document.getElementById('e-ticker2').value = sym2;
+    toast(`🎯 Top pair auto-filled: ${sym1} / ${sym2} (${top.zero_crossings} crossings)`, 'success');
+    // Auto-save execution config so the file is updated too
+    await saveExecutionConfig();
+  }
+}
 
 let pairsData = [];
 let pairsSort = { col: 'zero_crossings', asc: false };
