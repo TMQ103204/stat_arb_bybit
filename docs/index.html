@@ -229,11 +229,13 @@
           <span class="metric-value" id="metric-datapoints">—</span>
         </div>
       </div>
-      <div class="chart-container" style="height: 250px; margin-bottom: 20px;">
-        <canvas id="price-canvas"></canvas>
-      </div>
-      <div class="chart-container" style="height: 250px;">
-        <canvas id="backtest-canvas"></canvas>
+      <div class="charts-wrapper" style="display: flex; flex-direction: column; gap: 24px;">
+        <div class="chart-container" style="position: relative; height: 300px; width: 100%;">
+          <canvas id="price-canvas"></canvas>
+        </div>
+        <div class="chart-container" style="position: relative; height: 300px; width: 100%;">
+          <canvas id="backtest-canvas"></canvas>
+        </div>
       </div>
     </div>
   </div>
