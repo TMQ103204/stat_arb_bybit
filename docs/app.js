@@ -262,6 +262,8 @@ function selectPair(sym1, sym2) {
 // BACKTEST CHART
 // ═══════════════════════════════════════════════════════════════════
 
+let priceChart = null;
+
 async function loadBacktest() {
   try {
     const res = await api('/api/backtest');
@@ -269,9 +271,54 @@ async function loadBacktest() {
     const data = res.data;
     const cols = res.columns.filter(c => c !== '');
     const labels = data.map((_, i) => i);
-    const symCols = cols.filter(c => c !== 'Spread' && c !== 'ZScore');
+    const symCols = cols.filter(c => c !== 'Spread' && c !== 'ZScore' && c !== 'Date' && c !== 'Time');
+    
+    // Parse Backtest Chart data
     const spreadData = data.map(r => parseFloat(r['Spread']) || 0);
     const zscoreData = data.map(r => parseFloat(r['ZScore']) || null);
+
+    // --- Price Chart Logic ---
+    if (symCols.length >= 2) {
+      const sym1 = symCols[0];
+      const sym2 = symCols[1];
+      const p1 = data.map(r => parseFloat(r[sym1]) || 0);
+      const p2 = data.map(r => parseFloat(r[sym2]) || 0);
+
+      // Normalize prices to z-scores for visual comparison (so they start at same scale)
+      const mean1 = p1.reduce((a,b)=>a+b,0)/p1.length;
+      const std1 = Math.sqrt(p1.reduce((sq, n)=>sq+Math.pow(n-mean1,2),0)/(p1.length-1));
+      const norm1 = p1.map(v => std1 === 0 ? 0 : (v - mean1) / std1);
+
+      const mean2 = p2.reduce((a,b)=>a+b,0)/p2.length;
+      const std2 = Math.sqrt(p2.reduce((sq, n)=>sq+Math.pow(n-mean2,2),0)/(p2.length-1));
+      const norm2 = p2.map(v => std2 === 0 ? 0 : (v - mean2) / std2);
+
+      if (priceChart) priceChart.destroy();
+      const pctx = document.getElementById('price-canvas').getContext('2d');
+      priceChart = new Chart(pctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: sym1 + ' (Normalized)', data: norm1, borderColor: '#f59e0b', borderWidth: 1.5, pointRadius: 0, tension: 0.1 },
+            { label: sym2 + ' (Normalized)', data: norm2, borderColor: '#10b981', borderWidth: 1.5, pointRadius: 0, tension: 0.1 },
+          ]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: { 
+            legend: { labels: { color: '#94a3b8', font: { family: 'Outfit', size: 12 } } },
+            title: { display: true, text: 'Normalized Prices (Spread Visualization)', color: '#f8fafc', font: {family: 'Outfit', size: 14} }
+          },
+          scales: {
+            x: { display: false },
+            y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#64748b', font: { family: 'JetBrains Mono', size: 10 } } }
+          }
+        }
+      });
+    }
+    // --- End Price Chart ---
 
     if (backtestChart) backtestChart.destroy();
     const ctx = document.getElementById('backtest-canvas').getContext('2d');
