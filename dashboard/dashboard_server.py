@@ -26,8 +26,10 @@ DASHBOARD_DIR = BASE_DIR / "docs"
 STRATEGY_CONFIG = STRATEGY_DIR / "config_strategy_api.py"
 EXECUTION_CONFIG = EXECUTION_DIR / "config_execution_api.py"
 SYMBOLS_FILE = STRATEGY_DIR / "func_get_symbols.py"
-COINTEGRATED_CSV = BASE_DIR / "2_cointegrated_pairs.csv"
-BACKTEST_CSV = BASE_DIR / "3_backtest_file.csv"
+# Strategy writes CSV/JSON to strategy/ folder (relative paths with cwd=strategy)
+COINTEGRATED_CSV = STRATEGY_DIR / "2_cointegrated_pairs.csv"
+BACKTEST_CSV = STRATEGY_DIR / "3_backtest_file.csv"
+PRICE_JSON = STRATEGY_DIR / "1_price_list.json"
 STATUS_JSON = EXECUTION_DIR / "status.json"
 BOT_LOG = EXECUTION_DIR / "bot.log"
 
