@@ -211,12 +211,10 @@ def manage_new_trades(kill_switch):
                     if order_status_long == "Trade Complete" and order_status_short == "Trade Complete":
                         kill_switch = 1
 
-                    # If position filled - place another trade
+                    # If both legs filled - stop the entry loop and hold the position
                     if order_status_long == "Position Filled" and order_status_short == "Position Filled":
-                        counts_long = 0
-                        counts_short = 0
-                        retry_long = 0
-                        retry_short = 0
+                        logger.info("Both legs filled. Holding position.")
+                        kill_switch = 1
 
                     # If order cancelled for long - try again (with retry limit)
                     if order_status_long == "Try Again":
