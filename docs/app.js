@@ -256,6 +256,22 @@ function selectPair(sym1, sym2) {
   document.getElementById('e-ticker2').value = sym2;
   toast(`Selected: ${sym1} / ${sym2}`, 'success');
   document.getElementById('exec-config-card').scrollIntoView({ behavior: 'smooth' });
+  
+  // Dynamically load chart for selected pair
+  fetchDynamicBacktest(sym1, sym2);
+}
+
+async function fetchDynamicBacktest(sym1, sym2) {
+  toast(`Loading chart for ${sym1} / ${sym2}...`, 'info');
+  try {
+    const res = await api(`/api/backtest/pair?sym1=${sym1}&sym2=${sym2}`);
+    if (res.error) return toast(res.error, 'error');
+    if (!res.data || res.data.length === 0) return;
+    const data = res.data;
+    const cols = res.columns.filter(c => c !== '' && !c.toLowerCase().includes('unnamed'));
+    renderBacktestChart(data, cols);
+    toast(`Chart updated for ${sym1} / ${sym2}`, 'success');
+  } catch(e) { toast('Error loading pair data for chart', 'error'); }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -270,6 +286,11 @@ async function loadBacktest() {
     if (res.error || !res.data || res.data.length === 0) return;
     const data = res.data;
     const cols = res.columns.filter(c => c !== '' && !c.toLowerCase().includes('unnamed'));
+    renderBacktestChart(data, cols);
+  } catch(e) { /* offline */ }
+}
+
+function renderBacktestChart(data, cols) {
     const labels = data.map((_, i) => i);
     const symCols = cols.filter(c => c !== 'Spread' && c !== 'ZScore' && c !== 'Date' && c !== 'Time');
     
@@ -359,7 +380,6 @@ async function loadBacktest() {
       document.getElementById('metric-sym2').textContent = symCols[1];
     }
     document.getElementById('metric-datapoints').textContent = data.length;
-  } catch(e) { /* offline */ }
 }
 
 // ═══════════════════════════════════════════════════════════════════

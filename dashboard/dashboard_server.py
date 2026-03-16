@@ -288,6 +288,50 @@ def execution_status():
 # ROUTES – Data
 # ═══════════════════════════════════════════════════════════════════════════════
 
+@app.route("/api/backtest/pair", methods=["GET"])
+def get_backtest_pair():
+    try:
+        sym1 = request.args.get('sym1')
+        sym2 = request.args.get('sym2')
+        if not sym1 or not sym2:
+            return jsonify({"error": "Missing sym1 or sym2"}), 400
+            
+        sys.path.insert(0, str(STRATEGY_DIR))
+        from func_cointegration import extract_close_prices, calculate_cointegration, calculate_spread, calculate_zscore
+        
+        if not PRICE_JSON.exists():
+            return jsonify({"error": "Price data not found. Run strategy first."}), 400
+            
+        with open(PRICE_JSON, "r") as f:
+            prices = json.load(f)
+            
+        if sym1 not in prices or sym2 not in prices:
+            return jsonify({"error": f"Price data not found for {sym1} or {sym2}"}), 400
+            
+        prices_1 = extract_close_prices(prices[sym1])
+        prices_2 = extract_close_prices(prices[sym2])
+        
+        coint_flag, p_value, t_value, c_value, hedge_ratio, zero_crossing = calculate_cointegration(prices_1, prices_2)
+        spread = calculate_spread(prices_1, prices_2, hedge_ratio)
+        zscore = calculate_zscore(spread)
+        
+        # Build response rows
+        rows = []
+        for i in range(len(prices_1)):
+            rows.append({
+                sym1: prices_1[i],
+                sym2: prices_2[i],
+                "Spread": spread[i] if hasattr(spread, '__getitem__') else float('nan'),
+                "ZScore": zscore[i] if hasattr(zscore, '__getitem__') else float('nan')
+            })
+            
+        return jsonify({
+            "data": rows,
+            "columns": [sym1, sym2, "Spread", "ZScore"]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/pairs", methods=["GET"])
 def get_pairs():
     try:
