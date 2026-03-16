@@ -147,6 +147,11 @@ async function saveExecutionConfig() {
     const res = await api('/api/config/execution', { method: 'POST', body: data });
     if (res.error) return toast(res.error, 'error');
     toast('Execution config saved ✓', 'success');
+    
+    // Update the chart to visually reflect the new configuration pair
+    if (data.ticker_1 && data.ticker_2) {
+      fetchDynamicBacktest(data.ticker_1, data.ticker_2);
+    }
   } catch(e) { toast('Cannot connect to local server', 'error'); }
 }
 
