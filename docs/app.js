@@ -271,7 +271,10 @@ async function fetchDynamicBacktest(sym1, sym2) {
     const cols = res.columns.filter(c => c !== '' && !c.toLowerCase().includes('unnamed'));
     renderBacktestChart(data, cols);
     toast(`Chart updated for ${sym1} / ${sym2}`, 'success');
-  } catch(e) { toast('Error loading pair data for chart', 'error'); }
+  } catch(e) { 
+    console.error(e);
+    toast('Error loading pair data for chart: ' + e.message, 'error'); 
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════

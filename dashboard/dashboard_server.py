@@ -315,14 +315,26 @@ def get_backtest_pair():
         spread = calculate_spread(prices_1, prices_2, hedge_ratio)
         zscore = calculate_zscore(spread)
         
+        import math
+
+        def safe_float(val):
+            try:
+                f = float(val)
+                return None if math.isnan(f) else f
+            except Exception:
+                return None
+
         # Build response rows
         rows = []
         for i in range(len(prices_1)):
+            s_val = spread[i] if hasattr(spread, '__getitem__') else None
+            z_val = zscore[i] if hasattr(zscore, '__getitem__') else None
+            
             rows.append({
                 sym1: prices_1[i],
                 sym2: prices_2[i],
-                "Spread": spread[i] if hasattr(spread, '__getitem__') else float('nan'),
-                "ZScore": zscore[i] if hasattr(zscore, '__getitem__') else float('nan')
+                "Spread": safe_float(s_val),
+                "ZScore": safe_float(z_val)
             })
             
         return jsonify({
