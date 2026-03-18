@@ -91,6 +91,31 @@ def get_cointegrated_pairs(prices):
     # Output results
     df_coint = pd.DataFrame(coint_pair_list)
     if not df_coint.empty:
-        df_coint = df_coint.sort_values("zero_crossings", ascending=False)
-    df_coint.to_csv("2_cointegrated_pairs.csv")
+        # Bước 1: Lọc bỏ các cặp có hedge_ratio phi thực tế (Tùy chỉnh ngưỡng cho phù hợp với mức vốn)
+        df_coint = df_coint[(df_coint['hedge_ratio'] >= 0.01) & (df_coint['hedge_ratio'] <= 100)]
+        
+        # Bước 2: Tính toán thứ hạng (Rank) độc lập cho từng tiêu chí
+        # zero_crossings: Giá trị càng cao, thứ hạng càng tốt (ascending=False)
+        df_coint['rank_zero'] = df_coint['zero_crossings'].rank(ascending=False)
+        
+        # t_value: Càng âm sâu càng tốt (ascending=True)
+        df_coint['rank_t_val'] = df_coint['t_value'].rank(ascending=True)
+        
+        # p_value: Càng sát 0 càng tốt (ascending=True)
+        df_coint['rank_p_val'] = df_coint['p_value'].rank(ascending=True)
+        
+        # Bước 3: Tính điểm tổng hợp (Composite Score). Điểm càng THẤP thì cặp đó càng lý tưởng.
+        # Gán trọng số. Ví dụ: t_value (40%), zero_crossings (40%), p_value (20%)
+        df_coint['composite_score'] = (df_coint['rank_t_val'] * 0.4) + \
+                                      (df_coint['rank_zero'] * 0.4) + \
+                                      (df_coint['rank_p_val'] * 0.2)
+        
+        # Bước 4: Sắp xếp danh sách dựa trên điểm tổng hợp từ tốt nhất (nhỏ nhất) đến kém nhất
+        df_coint = df_coint.sort_values("composite_score", ascending=True)
+        
+        # (Tùy chọn) Xóa các cột thứ hạng tạm thời để file csv xuất ra gọn gàng hơn
+        df_coint = df_coint.drop(columns=['rank_zero', 'rank_t_val', 'rank_p_val'])
+        
+        # Lưu file
+        df_coint.to_csv("2_cointegrated_pairs.csv", index=False)
     return df_coint
