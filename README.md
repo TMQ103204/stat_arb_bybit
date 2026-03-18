@@ -2,7 +2,7 @@
 
 A professional, ultra-premium Statistical Arbitrage Trading Dashboard for Bybit. This project offers a robust backend for running complex quantitative trading strategies, execution logic, and an advanced real-time frontend dashboard.
 
-![Dashboard Preview](docs/dashboard_assets/preview.jpg) *(Imagine an ultra-premium dark theme dashboard here)*
+![Dashboard Preview](docs/dashboard_assets/preview.webp) *(Imagine an ultra-premium dark theme dashboard here)*
 
 ## Architecture 🏛️
 
