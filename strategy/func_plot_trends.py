@@ -1,5 +1,4 @@
-from func_cointegration import extract_close_prices
-from func_cointegration import calculate_cointegration
+from func_cointegration import extract_close_prices, calculate_cointegration_basic
 from func_cointegration import calculate_spread
 from func_cointegration import calculate_zscore
 import matplotlib.pyplot as plt
@@ -14,7 +13,11 @@ def plot_trends(sym_1, sym_2, price_data):
     prices_2 = extract_close_prices(price_data[sym_2])
 
     # Get spread and zscore
-    coint_flag, p_value, t_value, c_value, hedge_ratio, zero_crossing = calculate_cointegration(prices_1, prices_2)
+    basic = calculate_cointegration_basic(prices_1, prices_2)
+    if basic is None:
+        print(f"⚠ {sym_1} vs {sym_2} no longer cointegrated. Skipping plot.")
+        return
+    hedge_ratio = basic["hedge_ratio"]
     spread = calculate_spread(prices_1, prices_2, hedge_ratio)
     zscore = calculate_zscore(spread)
 

@@ -145,13 +145,12 @@ def calculate_backtest_win_rate(zscore_array, trigger_thresh=1.1):
     return round(wins / total, 4), total
 
 
-# Calculate co-integration (enhanced with advanced filters)
-def calculate_cointegration(series_1, series_2):
-    coint_flag = 0
+# Calculate co-integration (basic test only — fast)
+def calculate_cointegration_basic(series_1, series_2):
     try:
         coint_res = coint(series_1, series_2)
     except ValueError:
-        return (0, 1, 0, 0, 0, 0, 999, 0.5, False, 0.0, 0)
+        return None
     coint_t = float(coint_res[0])
     p_value = float(coint_res[1])
     critical_value = float(coint_res[2][1])
@@ -160,7 +159,22 @@ def calculate_cointegration(series_1, series_2):
     spread = calculate_spread(series_1, series_2, hedge_ratio)
     zero_crossings = int(len(np.where(np.diff(np.sign(spread)))[0]))
 
-    # ── Advanced filters ──
+    # Quick reject: basic test must pass first
+    if not (p_value < 0.05 and coint_t < critical_value and zero_crossings >= min_zero_crossings):
+        return None
+
+    return {
+        "p_value": round(p_value, 4),
+        "t_value": round(coint_t, 2),
+        "c_value": round(critical_value, 2),
+        "hedge_ratio": round(hedge_ratio, 5),
+        "zero_crossings": zero_crossings,
+        "spread": spread,
+    }
+
+
+# Run advanced filters on a pair that already passed basic test
+def run_advanced_filters(series_1, series_2, spread):
     half_life = calculate_half_life(spread)
     hurst = calculate_hurst_exponent(spread)
     is_stable = check_rolling_stability(
@@ -169,22 +183,7 @@ def calculate_cointegration(series_1, series_2):
     )
     zscore_array = calculate_zscore(spread)
     win_rate, total_trades = calculate_backtest_win_rate(zscore_array)
-
-    if p_value < 0.05 and coint_t < critical_value and zero_crossings >= min_zero_crossings:
-        coint_flag = 1
-    return (
-        coint_flag,
-        round(p_value, 4),
-        round(coint_t, 2),
-        round(critical_value, 2),
-        round(hedge_ratio, 5),
-        zero_crossings,
-        half_life,
-        hurst,
-        is_stable,
-        win_rate,
-        total_trades
-    )
+    return half_life, hurst, is_stable, win_rate, total_trades
 
 
 # Put close prices into a list
@@ -203,44 +202,62 @@ def get_cointegrated_pairs(prices):
 
     # Loop through coins and check for co-integration
     coint_pair_list = []
-    included_list = []
-    for sym_1 in prices.keys():
+    included_set = set()
+    symbols = list(prices.keys())
+    total_pairs = len(symbols) * (len(symbols) - 1) // 2
+    checked = 0
+    basic_pass = 0
 
-        # Check each coin against the first (sym_1)
-        for sym_2 in prices.keys():
-            if sym_2 != sym_1:
+    print(f"Scanning {total_pairs} pairs from {len(symbols)} symbols...")
 
-                # Get unique combination id and ensure one off check
-                sorted_characters = sorted(sym_1 + sym_2)
-                unique = "".join(sorted_characters)
-                if unique in included_list:
-                    continue
+    for i, sym_1 in enumerate(symbols):
+        for sym_2 in symbols[i + 1:]:
 
-                # Get close prices
-                series_1 = extract_close_prices(prices[sym_1])
-                series_2 = extract_close_prices(prices[sym_2])
+            # Get unique combination id
+            sorted_characters = sorted(sym_1 + sym_2)
+            unique = "".join(sorted_characters)
+            if unique in included_set:
+                continue
 
-                # Check for cointegration and add cointegrated pair
-                (coint_flag, p_value, t_value, c_value, hedge_ratio,
-                 zero_crossings, half_life, hurst, is_stable,
-                 win_rate, total_trades) = calculate_cointegration(series_1, series_2)
+            checked += 1
+            if checked % 500 == 0:
+                print(f"  Progress: {checked}/{total_pairs} checked, {basic_pass} passed basic test...")
 
-                if coint_flag == 1:
-                    included_list.append(unique)
-                    coint_pair_list.append({
-                        "sym_1": sym_1,
-                        "sym_2": sym_2,
-                        "p_value": p_value,
-                        "t_value": t_value,
-                        "c_value": c_value,
-                        "hedge_ratio": hedge_ratio,
-                        "zero_crossings": zero_crossings,
-                        "half_life": half_life,
-                        "hurst": hurst,
-                        "is_stable": is_stable,
-                        "win_rate": win_rate,
-                        "total_trades": total_trades
-                    })
+            # Get close prices
+            series_1 = extract_close_prices(prices[sym_1])
+            series_2 = extract_close_prices(prices[sym_2])
+            if not series_1 or not series_2:
+                continue
+
+            # STEP 1: Fast basic cointegration test
+            basic = calculate_cointegration_basic(series_1, series_2)
+            if basic is None:
+                continue
+
+            basic_pass += 1
+
+            # STEP 2: Only run expensive advanced filters on pairs that pass
+            half_life, hurst, is_stable, win_rate, total_trades = run_advanced_filters(
+                series_1, series_2, basic["spread"]
+            )
+
+            included_set.add(unique)
+            coint_pair_list.append({
+                "sym_1": sym_1,
+                "sym_2": sym_2,
+                "p_value": basic["p_value"],
+                "t_value": basic["t_value"],
+                "c_value": basic["c_value"],
+                "hedge_ratio": basic["hedge_ratio"],
+                "zero_crossings": basic["zero_crossings"],
+                "half_life": half_life,
+                "hurst": hurst,
+                "is_stable": is_stable,
+                "win_rate": win_rate,
+                "total_trades": total_trades
+            })
+
+    print(f"Done: {checked} pairs checked, {basic_pass} passed basic test, {len(coint_pair_list)} total candidates.")
 
     # Output results
     df_coint = pd.DataFrame(coint_pair_list)
@@ -266,24 +283,18 @@ def get_cointegrated_pairs(prices):
             return df_coint
 
         # Bước 3: Tính Composite Score mới
-        # half_life: Càng nhỏ càng tốt (ascending=True)
         df_coint['rank_hl'] = df_coint['half_life'].rank(ascending=True)
-        # hurst: Càng nhỏ càng tốt (ascending=True)
         df_coint['rank_hurst'] = df_coint['hurst'].rank(ascending=True)
-        # win_rate: Càng cao càng tốt (ascending=False)
         df_coint['rank_wr'] = df_coint['win_rate'].rank(ascending=False)
-        # zero_crossings: Càng cao càng tốt (ascending=False)
         df_coint['rank_zero'] = df_coint['zero_crossings'].rank(ascending=False)
-        # t_value: Càng âm sâu càng tốt (ascending=True)
         df_coint['rank_t_val'] = df_coint['t_value'].rank(ascending=True)
 
-        # Composite Score (điểm càng THẤP càng tốt)
         df_coint['composite_score'] = (
-            df_coint['rank_wr']    * 0.30 +   # Win rate (30%)
-            df_coint['rank_hl']    * 0.20 +   # Half-life (20%)
-            df_coint['rank_hurst'] * 0.20 +   # Hurst (20%)
-            df_coint['rank_zero']  * 0.15 +   # Zero crossings (15%)
-            df_coint['rank_t_val'] * 0.15      # T-value (15%)
+            df_coint['rank_wr']    * 0.30 +
+            df_coint['rank_hl']    * 0.20 +
+            df_coint['rank_hurst'] * 0.20 +
+            df_coint['rank_zero']  * 0.15 +
+            df_coint['rank_t_val'] * 0.15
         )
 
         # Bước 4: Sắp xếp theo composite score
@@ -298,3 +309,4 @@ def get_cointegrated_pairs(prices):
         df_coint.to_csv("2_cointegrated_pairs.csv", index=False)
         print(f"✅ {len(df_coint)} pairs survived advanced filtering.")
     return df_coint
+
