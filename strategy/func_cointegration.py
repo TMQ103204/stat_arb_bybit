@@ -262,51 +262,64 @@ def get_cointegrated_pairs(prices):
     # Output results
     df_coint = pd.DataFrame(coint_pair_list)
     if not df_coint.empty:
+        total_before = len(df_coint)
+
         # Bước 1: Lọc bỏ các cặp có hedge_ratio phi thực tế
         df_coint = df_coint[(df_coint['hedge_ratio'] >= 0.01) & (df_coint['hedge_ratio'] <= 100)]
+        print(f"  Filter hedge_ratio: {total_before} -> {len(df_coint)}")
 
-        # Bước 2: Lọc nâng cao
-        # - Half-life hợp lý (1 đến 80 nến)
+        # Bước 2: Lọc nâng cao (with diagnostics)
+        before = len(df_coint)
         df_coint = df_coint[(df_coint['half_life'] >= 1) & (df_coint['half_life'] <= 80)]
-        # - Hurst Exponent < 0.5 (chứng minh mean-reverting)
-        df_coint = df_coint[df_coint['hurst'] < 0.5]
-        # - Rolling Stability: cả 2 nửa dữ liệu đều cointegrated
-        df_coint = df_coint[df_coint['is_stable'] == True]
-        # - Win rate >= 60%
-        df_coint = df_coint[df_coint['win_rate'] >= 0.6]
-        # - Ít nhất 2 trades trong backtest
-        df_coint = df_coint[df_coint['total_trades'] >= 2]
+        print(f"  Filter half_life [1-80]: {before} -> {len(df_coint)}")
+
+        # Hurst: dùng như soft ranking, không phải hard filter
+        # (R/S Hurst bị bias cao trên chuỗi ngắn 200 nến, gần như luôn >= 0.5)
+        print(f"  Hurst: kept as soft ranking (not hard filter)")
+
+        before = len(df_coint)
+        df_coint = df_coint[df_coint['win_rate'] >= 0.4]
+        print(f"  Filter win_rate >= 0.4: {before} -> {len(df_coint)}")
+
+        before = len(df_coint)
+        df_coint = df_coint[df_coint['total_trades'] >= 1]
+        print(f"  Filter total_trades >= 1: {before} -> {len(df_coint)}")
 
         if df_coint.empty:
-            print("⚠ No pairs survived the advanced filters.")
+            print("[WARNING] No pairs survived the advanced filters.")
             df_coint.to_csv("2_cointegrated_pairs.csv", index=False)
             return df_coint
 
         # Bước 3: Tính Composite Score mới
+        # is_stable được dùng như bonus trong ranking, không phải hard filter
         df_coint['rank_hl'] = df_coint['half_life'].rank(ascending=True)
         df_coint['rank_hurst'] = df_coint['hurst'].rank(ascending=True)
         df_coint['rank_wr'] = df_coint['win_rate'].rank(ascending=False)
         df_coint['rank_zero'] = df_coint['zero_crossings'].rank(ascending=False)
         df_coint['rank_t_val'] = df_coint['t_value'].rank(ascending=True)
+        # Stable pairs get a bonus (rank 1 = best); unstable pairs get penalized
+        df_coint['rank_stable'] = df_coint['is_stable'].map({True: 1, False: 2}).rank(ascending=True)
 
         df_coint['composite_score'] = (
-            df_coint['rank_wr']    * 0.30 +
-            df_coint['rank_hl']    * 0.20 +
-            df_coint['rank_hurst'] * 0.20 +
-            df_coint['rank_zero']  * 0.15 +
-            df_coint['rank_t_val'] * 0.15
+            df_coint['rank_wr']      * 0.25 +
+            df_coint['rank_hl']      * 0.20 +
+            df_coint['rank_hurst']   * 0.20 +
+            df_coint['rank_stable']  * 0.15 +
+            df_coint['rank_zero']    * 0.10 +
+            df_coint['rank_t_val']   * 0.10
         )
 
         # Bước 4: Sắp xếp theo composite score
         df_coint = df_coint.sort_values("composite_score", ascending=True)
 
-        # Xóa cột tạm + cột boolean
+        # Xóa cột tạm
         df_coint = df_coint.drop(columns=[
-            'rank_hl', 'rank_hurst', 'rank_wr', 'rank_zero', 'rank_t_val', 'is_stable'
+            'rank_hl', 'rank_hurst', 'rank_wr', 'rank_zero', 'rank_t_val',
+            'rank_stable', 'is_stable'
         ])
 
         # Lưu file
         df_coint.to_csv("2_cointegrated_pairs.csv", index=False)
-        print(f"✅ {len(df_coint)} pairs survived advanced filtering.")
+        print(f"[OK] {len(df_coint)} pairs survived advanced filtering.")
     return df_coint
 

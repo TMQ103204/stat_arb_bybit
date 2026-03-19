@@ -1,7 +1,1 @@
-sym_1,sym_2,p_value,t_value,c_value,hedge_ratio,zero_crossings,composite_score
-KASUSDT,BEATUSDT,0.003,-4.26,-3.37,0.07168,35,1.6
-ANKRUSDT,AKTUSDT,0.0008,-4.62,-3.37,0.01005,32,2.2
-SIRENUSDT,BEATUSDT,0.0076,-3.98,-3.37,1.39169,33,2.6
-DOGEUSDT,GALAUSDT,0.0106,-3.88,-3.37,27.73208,32,4.0
-BNBUSDT,BCHUSDT,0.0264,-3.57,-3.37,1.42453,32,4.6
-1000BONKUSDT,ARBUSDT,0.0382,-3.44,-3.37,0.06007,30,6.000000000000001
+sym_1,sym_2,p_value,t_value,c_value,hedge_ratio,zero_crossings,half_life,hurst,is_stable,win_rate,total_trades
