@@ -1,4 +1,4 @@
-from config_strategy_api import z_score_window
+from config_strategy_api import z_score_window, min_zero_crossings
 from statsmodels.tsa.stattools import coint
 import statsmodels.api as sm
 import pandas as pd
@@ -36,7 +36,7 @@ def calculate_cointegration(series_1, series_2):
     hedge_ratio = float(model.params[0])
     spread = calculate_spread(series_1, series_2, hedge_ratio)
     zero_crossings = int(len(np.where(np.diff(np.sign(spread)))[0]))
-    if p_value < 0.05 and coint_t < critical_value and zero_crossings >= 20:
+    if p_value < 0.05 and coint_t < critical_value and zero_crossings >= min_zero_crossings:
         coint_flag = 1
     return (coint_flag, round(p_value, 4), round(coint_t, 2), round(critical_value, 2), round(hedge_ratio, 5), zero_crossings)
 

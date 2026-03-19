@@ -17,6 +17,7 @@ mode = "demo"
 timeframe = 60
 kline_limit = 200
 z_score_window = 21
+min_zero_crossings = 20
 
 # API KEYS from .env
 api_key_mainnet = os.getenv("API_KEY_MAINNET", "")

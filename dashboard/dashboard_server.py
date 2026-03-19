@@ -63,6 +63,8 @@ def parse_strategy_config():
     config["kline_limit"] = int(m.group(1)) if m else 200
     m = re.search(r'^z_score_window\s*=\s*(\d+)', content, re.MULTILINE)
     config["z_score_window"] = int(m.group(1)) if m else 21
+    m = re.search(r'^min_zero_crossings\s*=\s*(\d+)', content, re.MULTILINE)
+    config["min_zero_crossings"] = int(m.group(1)) if m else 20
     # Liquidity from func_get_symbols.py
     if SYMBOLS_FILE.exists():
         sym_content = SYMBOLS_FILE.read_text(encoding="utf-8")
@@ -80,6 +82,18 @@ def write_strategy_config(config):
     content = re.sub(r'^timeframe\s*=\s*\d+', f'timeframe = {config["timeframe"]}', content, flags=re.MULTILINE)
     content = re.sub(r'^kline_limit\s*=\s*\d+', f'kline_limit = {config["kline_limit"]}', content, flags=re.MULTILINE)
     content = re.sub(r'^z_score_window\s*=\s*\d+', f'z_score_window = {config["z_score_window"]}', content, flags=re.MULTILINE)
+    if "min_zero_crossings" in config:
+        try:
+            min_zero_crossings = int(config["min_zero_crossings"])
+        except (TypeError, ValueError):
+            min_zero_crossings = 20
+        if re.search(r'^min_zero_crossings\s*=\s*\d+', content, re.MULTILINE):
+            content = re.sub(r'^min_zero_crossings\s*=\s*\d+',
+                             f'min_zero_crossings = {min_zero_crossings}',
+                             content,
+                             flags=re.MULTILINE)
+        else:
+            content = content.rstrip() + f'\nmin_zero_crossings = {min_zero_crossings}\n'
     STRATEGY_CONFIG.write_text(content, encoding="utf-8")
     # Write liquidity to func_get_symbols.py
     if "min_turnover_24h" in config and SYMBOLS_FILE.exists():

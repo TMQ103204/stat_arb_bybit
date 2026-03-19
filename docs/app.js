@@ -111,6 +111,8 @@ async function loadStrategyConfig() {
     document.getElementById("s-timeframe").value = cfg.timeframe;
     document.getElementById("s-kline").value = cfg.kline_limit;
     document.getElementById("s-zscore-win").value = cfg.z_score_window;
+    document.getElementById("s-min-zero-cross").value =
+      cfg.min_zero_crossings ?? 20;
     document.getElementById("s-liquidity").value =
       cfg.min_turnover_24h || 2000000;
   } catch (e) {
@@ -119,11 +121,15 @@ async function loadStrategyConfig() {
 }
 
 async function saveStrategyConfig() {
+  const minZeroCross = parseInt(
+    document.getElementById("s-min-zero-cross").value,
+  );
   const data = {
     mode: document.getElementById("s-mode").value,
     timeframe: parseInt(document.getElementById("s-timeframe").value),
     kline_limit: parseInt(document.getElementById("s-kline").value),
     z_score_window: parseInt(document.getElementById("s-zscore-win").value),
+    min_zero_crossings: Number.isNaN(minZeroCross) ? 20 : minZeroCross,
     min_turnover_24h: parseInt(document.getElementById("s-liquidity").value),
   };
   try {
