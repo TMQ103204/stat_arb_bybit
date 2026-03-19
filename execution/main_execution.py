@@ -79,7 +79,17 @@ if __name__ == "__main__":
             if not is_manage_new_trades and kill_switch == 0:
                 kill_switch = 1
                 position_open_time = time.time()
-                status_dict["message"] = "Re-attached to open positions"
+                # Determine signal_side from current z-score for re-attach
+                if not signal_side:
+                    reattach_result = get_latest_zscore()
+                    if reattach_result is not None:
+                        reattach_zscore = float(cast(float, reattach_result[0]))
+                        signal_side = "positive" if reattach_zscore > 0 else "negative"
+                        logger.info("Re-attached: signal_side=%s (z-score=%.4f)", signal_side, reattach_zscore)
+                    else:
+                        signal_side = "positive"  # fallback
+                        logger.warning("Re-attached with fallback signal_side=positive")
+                status_dict["message"] = f"Re-attached to open positions (side={signal_side})"
                 save_status(status_dict)
 
             # Managing open kill switch if positions change or should reach 2
@@ -122,10 +132,9 @@ if __name__ == "__main__":
                     logger.info("TAKE PROFIT: Z-Score crossed above 0 (was negative side)")
                     kill_switch = 2
 
-                # Put back to zero if trades are closed
-                if is_manage_new_trades and kill_switch != 2:
-                    kill_switch = 0
-                    position_open_time = 0.0
+                # NOTE: Do NOT reset kill_switch to 0 based on is_manage_new_trades here.
+                # The position API can be flaky and temporarily report no positions,
+                # causing kill_switch to flip 0→1 in a loop with stale z-scores.
 
             # Close all active orders and positions
             if kill_switch == 2:

@@ -62,11 +62,14 @@ def close_all_positions(kill_switch):
     side_1, size_1 = get_position_info(signal_positive_ticker)
     side_2, size_2 = get_position_info(signal_negative_ticker)
 
-    if size_1 > 0:
-        place_market_close_order(signal_positive_ticker, side_2, size_1) # use side 2
+    # Close each position using its OWN opposite side
+    if size_1 > 0 and side_1:
+        close_side_1 = "Sell" if side_1 == "Buy" else "Buy"
+        place_market_close_order(signal_positive_ticker, close_side_1, size_1)
 
-    if size_2 > 0:
-        place_market_close_order(signal_negative_ticker, side_1, size_2) # use side 1
+    if size_2 > 0 and side_2:
+        close_side_2 = "Sell" if side_2 == "Buy" else "Buy"
+        place_market_close_order(signal_negative_ticker, close_side_2, size_2)
 
     # Output results
     kill_switch = 0
