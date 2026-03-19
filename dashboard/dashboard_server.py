@@ -353,7 +353,7 @@ def get_backtest_pair():
             return jsonify({"error": "Missing sym1 or sym2"}), 400
             
         sys.path.insert(0, str(STRATEGY_DIR))
-        from func_cointegration import extract_close_prices, calculate_cointegration, calculate_spread, calculate_zscore
+        from func_cointegration import extract_close_prices, calculate_cointegration_basic, calculate_spread, calculate_zscore
         
         if not PRICE_JSON.exists():
             return jsonify({"error": "Price data not found. Run strategy first."}), 400
@@ -367,7 +367,10 @@ def get_backtest_pair():
         prices_1 = extract_close_prices(prices[sym1])
         prices_2 = extract_close_prices(prices[sym2])
         
-        coint_flag, p_value, t_value, c_value, hedge_ratio, zero_crossing = calculate_cointegration(prices_1, prices_2)
+        basic = calculate_cointegration_basic(prices_1, prices_2)
+        if basic is None:
+            return jsonify({"error": f"{sym1} vs {sym2} are not cointegrated"}), 400
+        hedge_ratio = basic["hedge_ratio"]
         spread = calculate_spread(prices_1, prices_2, hedge_ratio)
         zscore = calculate_zscore(spread)
         

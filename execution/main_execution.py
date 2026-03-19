@@ -96,6 +96,14 @@ if __name__ == "__main__":
 
                 from config_execution_api import zscore_stop_loss, time_stop_loss_hours
 
+                # Log live position status
+                hold_minutes = (time.time() - position_open_time) / 60 if position_open_time > 0 else 0
+                hold_hours = hold_minutes / 60
+                logger.info(
+                    "HOLDING | Z-Score: %.4f | Side: %s | Hold: %.0fm (%.1fh/%.0fh) | SL: %.1f",
+                    zscore, signal_side, hold_minutes, hold_hours, float(time_stop_loss_hours), float(zscore_stop_loss)
+                )
+
                 # 1. Close positions (Stop-Loss: Z-score divergence)
                 if abs(zscore) > float(zscore_stop_loss):
                     logger.critical("Z-SCORE STOP LOSS REACHED: %.4f exceeds threshold %.4f", zscore, float(zscore_stop_loss))
@@ -108,8 +116,10 @@ if __name__ == "__main__":
 
                 # 3. Close positions (Take Profit: Mean Reversion)
                 elif signal_side == "positive" and zscore < 0:
+                    logger.info("TAKE PROFIT: Z-Score crossed below 0 (was positive side)")
                     kill_switch = 2
                 elif signal_side == "negative" and zscore >= 0:
+                    logger.info("TAKE PROFIT: Z-Score crossed above 0 (was negative side)")
                     kill_switch = 2
 
                 # Put back to zero if trades are closed
