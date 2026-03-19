@@ -17,7 +17,10 @@ import sys
 import time
 
 # -- allow running from the execution/ directory directly
-sys.path.insert(0, os.path.dirname(__file__))
+EXECUTION_DIR = os.path.dirname(__file__)
+PROJECT_ROOT = os.path.dirname(EXECUTION_DIR)
+sys.path.insert(0, EXECUTION_DIR)   # for config_execution_api, logger_setup, etc.
+sys.path.insert(0, PROJECT_ROOT)    # for bybit_response (lives in project root)
 
 from config_execution_api import (
     signal_positive_ticker,
