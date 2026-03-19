@@ -13,15 +13,15 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 # CONFIG VARIABLES
 # mode options: "test" (testnet), "demo" (mainnet demo - real prices, virtual money), "live" (real money)
-mode = "demo"
-ticker_1 = "AEVOUSDT"
-ticker_2 = "KNCUSDT"
+mode = "test"
+ticker_1 = "ORDERUSDT"
+ticker_2 = "LSKUSDT"
 signal_positive_ticker = ticker_2
 signal_negative_ticker = ticker_1
 
 limit_order_basis = True # will ensure positions (except for Close) will be placed on limit basis
 
-tradeable_capital_usdt = 1000 # total tradeable capital to be split between both pairs
+tradeable_capital_usdt = 10000 # total tradeable capital to be split between both pairs
 stop_loss_fail_safe = 0.15 # stop loss at market order in case of drastic event
 signal_trigger_thresh = 1.1 # z-score threshold which determines trade (must be above zero)
 zscore_stop_loss = 3      # emergency stop-loss: absolute z-score beyond which all positions are closed at market
