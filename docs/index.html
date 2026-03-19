@@ -1,297 +1,440 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>StatArb Dashboard – Bybit</title>
-  <meta name="description" content="Professional Statistical Arbitrage Trading Dashboard for Bybit">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%236366f1'/><text x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle' fill='white' font-size='16' font-weight='bold'>SA</text></svg>">
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-</head>
-<body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StatArb Dashboard – Bybit</title>
+    <meta
+      name="description"
+      content="Professional Statistical Arbitrage Trading Dashboard for Bybit"
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%236366f1'/><text x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle' fill='white' font-size='16' font-weight='bold'>SA</text></svg>"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <!-- Dynamic Background -->
+    <div class="bg-mesh"></div>
 
-<!-- Dynamic Background -->
-<div class="bg-mesh"></div>
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
 
-<!-- Toast Container -->
-<div id="toast-container" class="toast-container"></div>
-
-<!-- ═══ HEADER ═══ -->
-<header class="header">
-  <div class="header-brand">
-    <div class="logo">SA</div>
-    <h1>StatArb Dashboard</h1>
-    <span class="tag">Bybit</span>
-  </div>
-  <div class="header-status">
-    <div class="status-indicator" title="Local server connection">
-      <span class="status-dot error" id="conn-dot"></span>
-      <span id="conn-label" style="color:var(--red)">DISCONNECTED</span>
-    </div>
-    <div class="status-indicator">
-      <span class="status-dot" id="bot-status-dot"></span>
-      <span id="bot-status-label">STOPPED</span>
-    </div>
-    <span class="header-time" id="header-time">--:--:--</span>
-  </div>
-</header>
-
-<!-- ═══ DASHBOARD GRID ═══ -->
-<main class="dashboard">
-
-  <!-- ────── Server Connection ────── -->
-  <div class="card full-width">
-    <div class="card-header">
-      <span class="card-title"><span class="icon">🔌</span> Server Connection</span>
-    </div>
-    <div class="card-body" style="padding: 14px 20px;">
-      <div style="display:flex; gap:10px; align-items:center;">
-        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.8px; white-space:nowrap;">API URL</label>
-        <input type="text" id="api-url-input" value="http://localhost:5000" style="flex:1; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 12px; color:var(--text-primary); font-family:'JetBrains Mono',monospace; font-size:13px; outline:none;">
-        <button class="btn btn-accent btn-sm" onclick="saveApiUrl()">🔗 Connect</button>
+    <!-- ═══ HEADER ═══ -->
+    <header class="header">
+      <div class="header-brand">
+        <div class="logo">SA</div>
+        <h1>StatArb Dashboard</h1>
+        <span class="tag">Bybit</span>
       </div>
-      <p style="font-size:11px; color:var(--text-muted); margin-top:8px;">Run <code style="color:var(--cyan);">python dashboard/dashboard_server.py</code> on your local machine, then click Connect.</p>
-    </div>
-  </div>
+      <div class="header-status">
+        <div class="status-indicator" title="Local server connection">
+          <span class="status-dot error" id="conn-dot"></span>
+          <span id="conn-label" style="color: var(--red)">DISCONNECTED</span>
+        </div>
+        <div class="status-indicator">
+          <span class="status-dot" id="bot-status-dot"></span>
+          <span id="bot-status-label">STOPPED</span>
+        </div>
+        <span class="header-time" id="header-time">--:--:--</span>
+      </div>
+    </header>
 
-  <!-- ────── Strategy Config ────── -->
-  <div class="card" id="strategy-config-card">
-    <div class="card-header">
-      <span class="card-title"><span class="icon">⚙️</span> Strategy Config</span>
-      <div class="card-actions">
-        <button class="btn btn-accent btn-sm" onclick="saveStrategyConfig()">💾 Save</button>
+    <!-- ═══ DASHBOARD GRID ═══ -->
+    <main class="dashboard">
+      <!-- ────── Server Connection ────── -->
+      <div class="card full-width">
+        <div class="card-header">
+          <span class="card-title"
+            ><span class="icon">🔌</span> Server Connection</span
+          >
+        </div>
+        <div class="card-body" style="padding: 14px 20px">
+          <div style="display: flex; gap: 10px; align-items: center">
+            <label
+              style="
+                font-size: 11px;
+                color: var(--text-muted);
+                text-transform: uppercase;
+                letter-spacing: 0.8px;
+                white-space: nowrap;
+              "
+              >API URL</label
+            >
+            <input
+              type="text"
+              id="api-url-input"
+              value="http://localhost:5000"
+              style="
+                flex: 1;
+                background: var(--bg-input);
+                border: 1px solid var(--border);
+                border-radius: var(--radius-sm);
+                padding: 8px 12px;
+                color: var(--text-primary);
+                font-family: &quot;JetBrains Mono&quot;, monospace;
+                font-size: 13px;
+                outline: none;
+              "
+            />
+            <button class="btn btn-accent btn-sm" onclick="saveApiUrl()">
+              🔗 Connect
+            </button>
+          </div>
+          <p style="font-size: 11px; color: var(--text-muted); margin-top: 8px">
+            Run
+            <code style="color: var(--cyan)"
+              >python dashboard/dashboard_server.py</code
+            >
+            on your local machine, then click Connect.
+          </p>
+        </div>
       </div>
-    </div>
-    <div class="card-body">
-      <div class="form-grid">
-        <div class="form-group">
-          <label>Mode</label>
-          <select id="s-mode">
-            <option value="test">Test (Testnet)</option>
-            <option value="demo">Demo (Mainnet Demo)</option>
-            <option value="live">Live (Real Money)</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Timeframe (min)</label>
-          <input type="number" id="s-timeframe" value="60">
-        </div>
-        <div class="form-group">
-          <label>Kline Limit</label>
-          <input type="number" id="s-kline" value="200">
-        </div>
-        <div class="form-group">
-          <label>Z-Score Window</label>
-          <input type="number" id="s-zscore-win" value="21">
-        </div>
-        <div class="form-group">
-          <label>Min Liquidity 24h (USDT)</label>
-          <input type="number" id="s-liquidity" step="100000" value="2000000">
-        </div>
-      </div>
-    </div>
-  </div>
 
-  <!-- ────── Strategy Runner ────── -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-title"><span class="icon">🚀</span> Strategy Pipeline</span>
-      <div class="card-actions">
-        <button class="btn btn-green btn-sm" id="btn-run-strategy" onclick="runStrategy()">▶ Run Strategy</button>
-      </div>
-    </div>
-    <div class="card-body">
-      <pre class="terminal" id="strategy-terminal">Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. Store price history\n  3. Find cointegrated pairs\n  4. Plot trends & save backtest</pre>
-    </div>
-  </div>
-
-  <!-- ────── Execution Config ────── -->
-  <div class="card full-width" id="exec-config-card">
-    <div class="card-header">
-      <span class="card-title"><span class="icon">🎯</span> Execution Config</span>
-      <div class="card-actions">
-        <button class="btn btn-accent btn-sm" onclick="saveExecutionConfig()">💾 Save</button>
-      </div>
-    </div>
-    <div class="card-body">
-      <div class="form-grid" style="grid-template-columns: repeat(4, 1fr);">
-        <div class="form-group">
-          <label>Mode</label>
-          <select id="e-mode">
-            <option value="test">Test (Testnet)</option>
-            <option value="demo">Demo (Mainnet Demo)</option>
-            <option value="live">Live (Real Money)</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Ticker 1</label>
-          <input type="text" id="e-ticker1" placeholder="e.g. BIOUSDT">
-        </div>
-        <div class="form-group">
-          <label>Ticker 2</label>
-          <input type="text" id="e-ticker2" placeholder="e.g. PIPPINUSDT">
-        </div>
-        <div class="form-group">
-          <label>Capital (USDT)</label>
-          <input type="number" id="e-capital" step="100" value="10000">
-        </div>
-        <div class="form-group">
-          <label>Signal Trigger Thresh</label>
-          <input type="number" id="e-trigger" step="0.1" value="1.1">
-        </div>
-        <div class="form-group">
-          <label>Stop Loss Fail Safe</label>
-          <input type="number" id="e-stoploss" step="0.01" value="0.15">
-        </div>
-        <div class="form-group">
-          <label>Z-Score Stop Loss</label>
-          <input type="number" id="e-zstop" step="0.1" value="3.0">
-        </div>
-        <div class="form-group">
-          <label>Limit Order Basis</label>
-          <div class="toggle-wrap" style="margin-top: 6px;">
-            <input type="checkbox" id="e-limit" checked style="display:none;">
-            <div class="toggle active" onclick="this.classList.toggle('active'); document.getElementById('e-limit').checked = this.classList.contains('active');"></div>
-            <span style="font-size:12px; color:var(--text-secondary);" id="e-limit-label">Enabled</span>
+      <!-- ────── Strategy Config ────── -->
+      <div class="card" id="strategy-config-card">
+        <div class="card-header">
+          <span class="card-title"
+            ><span class="icon">⚙️</span> Strategy Config</span
+          >
+          <div class="card-actions">
+            <button
+              class="btn btn-accent btn-sm"
+              onclick="saveStrategyConfig()"
+            >
+              💾 Save
+            </button>
           </div>
         </div>
-        <div class="form-group">
-          <label>Timeframe (min)</label>
-          <input type="number" id="e-timeframe" value="60">
-        </div>
-        <div class="form-group">
-          <label>Kline Limit</label>
-          <input type="number" id="e-kline" value="200">
-        </div>
-        <div class="form-group">
-          <label>Z-Score Window</label>
-          <input type="number" id="e-zscore-win" value="21">
+        <div class="card-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Mode</label>
+              <select id="s-mode">
+                <option value="test">Test (Testnet)</option>
+                <option value="demo">Demo (Mainnet Demo)</option>
+                <option value="live">Live (Real Money)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Timeframe (min)</label>
+              <input type="number" id="s-timeframe" value="60" />
+            </div>
+            <div class="form-group">
+              <label>Kline Limit</label>
+              <input type="number" id="s-kline" value="200" />
+            </div>
+            <div class="form-group">
+              <label>Z-Score Window</label>
+              <input type="number" id="s-zscore-win" value="21" />
+            </div>
+            <div class="form-group">
+              <label>Min Liquidity 24h (USDT)</label>
+              <input
+                type="number"
+                id="s-liquidity"
+                step="100000"
+                value="2000000"
+              />
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-  </div>
 
-  <!-- ────── Cointegrated Pairs Table ────── -->
-  <div class="card full-width">
-    <div class="card-header">
-      <span class="card-title"><span class="icon">📊</span> Cointegrated Pairs <span style="font-size:12px;color:var(--cyan);font-weight:400;">(<span id="pairs-count">0</span> pairs)</span></span>
-      <div class="card-actions">
-        <button class="btn btn-outline btn-sm" onclick="loadPairs()">↻ Refresh</button>
+      <!-- ────── Strategy Runner ────── -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title"
+            ><span class="icon">🚀</span> Strategy Pipeline</span
+          >
+          <div class="card-actions">
+            <button
+              class="btn btn-green btn-sm"
+              id="btn-run-strategy"
+              onclick="runStrategy()"
+            >
+              ▶ Run Strategy
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <pre class="terminal" id="strategy-terminal">
+Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. Store price history\n  3. Find cointegrated pairs\n  4. Plot trends & save backtest</pre
+          >
+        </div>
       </div>
-    </div>
-    <div class="card-body" style="padding:0;">
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th onclick="sortPairs('sym_1')">Symbol 1</th>
-              <th onclick="sortPairs('sym_2')">Symbol 2</th>
-              <th onclick="sortPairs('p_value')">P-Value</th>
-              <th onclick="sortPairs('t_value')">T-Value</th>
-              <th onclick="sortPairs('c_value')">C-Value</th>
-              <th onclick="sortPairs('hedge_ratio')">Hedge Ratio</th>
-              <th onclick="sortPairs('zero_crossings')">Zero Cross ↓</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="pairs-tbody"></tbody>
-        </table>
-      </div>
-    </div>
-  </div>
 
-  <!-- ────── Backtest Chart ────── -->
-  <div class="card full-width">
-    <div class="card-header">
-      <span class="card-title"><span class="icon">📈</span> Backtest Analysis</span>
-      <div class="card-actions">
-        <button class="btn btn-outline btn-sm" onclick="loadBacktest()">↻ Refresh</button>
+      <!-- ────── Execution Config ────── -->
+      <div class="card full-width" id="exec-config-card">
+        <div class="card-header">
+          <span class="card-title"
+            ><span class="icon">🎯</span> Execution Config</span
+          >
+          <div class="card-actions">
+            <button
+              class="btn btn-accent btn-sm"
+              onclick="saveExecutionConfig()"
+            >
+              💾 Save
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="form-grid" style="grid-template-columns: repeat(4, 1fr)">
+            <div class="form-group">
+              <label>Mode</label>
+              <select id="e-mode">
+                <option value="test">Test (Testnet)</option>
+                <option value="demo">Demo (Mainnet Demo)</option>
+                <option value="live">Live (Real Money)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Ticker 1</label>
+              <input type="text" id="e-ticker1" placeholder="e.g. BIOUSDT" />
+            </div>
+            <div class="form-group">
+              <label>Ticker 2</label>
+              <input type="text" id="e-ticker2" placeholder="e.g. PIPPINUSDT" />
+            </div>
+            <div class="form-group">
+              <label>Capital (USDT)</label>
+              <input type="number" id="e-capital" step="100" value="10000" />
+            </div>
+            <div class="form-group">
+              <label>Signal Trigger Thresh</label>
+              <input type="number" id="e-trigger" step="0.1" value="1.1" />
+            </div>
+            <div class="form-group">
+              <label>Stop Loss Fail Safe</label>
+              <input type="number" id="e-stoploss" step="0.01" value="0.15" />
+            </div>
+            <div class="form-group">
+              <label>Z-Score Stop Loss</label>
+              <input type="number" id="e-zstop" step="0.1" value="3.0" />
+            </div>
+            <div class="form-group">
+              <label>Limit Order Basis</label>
+              <div class="toggle-wrap" style="margin-top: 6px">
+                <input
+                  type="checkbox"
+                  id="e-limit"
+                  checked
+                  style="display: none"
+                />
+                <div
+                  class="toggle active"
+                  onclick="
+                    this.classList.toggle('active');
+                    document.getElementById('e-limit').checked =
+                      this.classList.contains('active');
+                  "
+                ></div>
+                <span
+                  style="font-size: 12px; color: var(--text-secondary)"
+                  id="e-limit-label"
+                  >Enabled</span
+                >
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Timeframe (min)</label>
+              <input type="number" id="e-timeframe" value="60" />
+            </div>
+            <div class="form-group">
+              <label>Kline Limit</label>
+              <input type="number" id="e-kline" value="200" />
+            </div>
+            <div class="form-group">
+              <label>Z-Score Window</label>
+              <input type="number" id="e-zscore-win" value="21" />
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
-    <div class="card-body">
-      <div class="metrics-row">
-        <div class="metric-chip">
-          <span class="metric-label">Symbol 1</span>
-          <span class="metric-value" id="metric-sym1">—</span>
-        </div>
-        <div class="metric-chip">
-          <span class="metric-label">Symbol 2</span>
-          <span class="metric-value" id="metric-sym2">—</span>
-        </div>
-        <div class="metric-chip">
-          <span class="metric-label">Latest Z-Score</span>
-          <span class="metric-value" id="metric-zscore">—</span>
-        </div>
-        <div class="metric-chip">
-          <span class="metric-label">Data Points</span>
-          <span class="metric-value" id="metric-datapoints">—</span>
-        </div>
-      </div>
-      <div class="charts-wrapper" style="display: flex; flex-direction: column; gap: 24px;">
-        <div class="chart-container" style="position: relative; height: 300px; width: 100%;">
-          <canvas id="price-canvas"></canvas>
-        </div>
-        <div class="chart-container" style="position: relative; height: 300px; width: 100%;">
-          <canvas id="backtest-canvas"></canvas>
-        </div>
-      </div>
-    </div>
-  </div>
 
-  <!-- ────── Execution Bot Control ────── -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-title"><span class="icon">🤖</span> Execution Bot</span>
-      <div class="card-actions">
-        <button class="btn btn-green btn-sm" id="btn-start-bot" onclick="startExecution()">▶ Start</button>
-        <button class="btn btn-red btn-sm" id="btn-stop-bot" onclick="stopExecution()" disabled>⏹ Stop</button>
-      </div>
-    </div>
-    <div class="card-body">
-      <div class="metrics-row">
-        <div class="metric-chip">
-          <span class="metric-label">Status</span>
-          <span class="metric-value" id="bot-message">Idle</span>
+      <!-- ────── Cointegrated Pairs Table ────── -->
+      <div class="card full-width">
+        <div class="card-header">
+          <span class="card-title"
+            ><span class="icon">📊</span> Cointegrated Pairs
+            <span style="font-size: 12px; color: var(--cyan); font-weight: 400"
+              >(<span id="pairs-count">0</span> pairs)</span
+            ></span
+          >
+          <div class="card-actions">
+            <button class="btn btn-outline btn-sm" onclick="loadPairs()">
+              ↻ Refresh
+            </button>
+          </div>
+        </div>
+        <div class="card-body" style="padding: 0">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th onclick="sortPairs('sym_1')">Symbol 1</th>
+                  <th onclick="sortPairs('sym_2')">Symbol 2</th>
+                  <th onclick="sortPairs('p_value')">P-Value</th>
+                  <th onclick="sortPairs('t_value')">T-Value</th>
+                  <th onclick="sortPairs('c_value')">C-Value</th>
+                  <th onclick="sortPairs('hedge_ratio')">Hedge Ratio</th>
+                  <th onclick="sortPairs('zero_crossings')">Zero Cross</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="pairs-tbody"></tbody>
+            </table>
+          </div>
         </div>
       </div>
-      <pre class="terminal" id="execution-terminal">Bot is idle. Configure your pair and click Start.</pre>
-    </div>
-  </div>
 
-  <!-- ────── Git & Deploy ────── -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-title"><span class="icon">🔀</span> Git & Deploy</span>
-      <div class="card-actions">
-        <button class="btn btn-outline btn-sm" onclick="loadGitStatus()">↻ Status</button>
+      <!-- ────── Backtest Chart ────── -->
+      <div class="card full-width">
+        <div class="card-header">
+          <span class="card-title"
+            ><span class="icon">📈</span> Backtest Analysis</span
+          >
+          <div class="card-actions">
+            <button class="btn btn-outline btn-sm" onclick="loadBacktest()">
+              ↻ Refresh
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="metrics-row">
+            <div class="metric-chip">
+              <span class="metric-label">Symbol 1</span>
+              <span class="metric-value" id="metric-sym1">—</span>
+            </div>
+            <div class="metric-chip">
+              <span class="metric-label">Symbol 2</span>
+              <span class="metric-value" id="metric-sym2">—</span>
+            </div>
+            <div class="metric-chip">
+              <span class="metric-label">Latest Z-Score</span>
+              <span class="metric-value" id="metric-zscore">—</span>
+            </div>
+            <div class="metric-chip">
+              <span class="metric-label">Data Points</span>
+              <span class="metric-value" id="metric-datapoints">—</span>
+            </div>
+          </div>
+          <div
+            class="charts-wrapper"
+            style="display: flex; flex-direction: column; gap: 24px"
+          >
+            <div
+              class="chart-container"
+              style="position: relative; height: 300px; width: 100%"
+            >
+              <canvas id="price-canvas"></canvas>
+            </div>
+            <div
+              class="chart-container"
+              style="position: relative; height: 300px; width: 100%"
+            >
+              <canvas id="backtest-canvas"></canvas>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
-    <div class="card-body">
-      <div class="git-status-box" id="git-status-box">Loading git status...</div>
-      <div class="git-row">
-        <input type="text" id="git-message" placeholder="Commit message..." value="Dashboard update">
-        <button class="btn btn-accent btn-sm" id="btn-git-push" onclick="gitPush()">⬆ Push to GitHub</button>
+
+      <!-- ────── Execution Bot Control ────── -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title"
+            ><span class="icon">🤖</span> Execution Bot</span
+          >
+          <div class="card-actions">
+            <button
+              class="btn btn-green btn-sm"
+              id="btn-start-bot"
+              onclick="startExecution()"
+            >
+              ▶ Start
+            </button>
+            <button
+              class="btn btn-red btn-sm"
+              id="btn-stop-bot"
+              onclick="stopExecution()"
+              disabled
+            >
+              ⏹ Stop
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="metrics-row">
+            <div class="metric-chip">
+              <span class="metric-label">Status</span>
+              <span class="metric-value" id="bot-message">Idle</span>
+            </div>
+          </div>
+          <pre class="terminal" id="execution-terminal">
+Bot is idle. Configure your pair and click Start.</pre
+          >
+        </div>
       </div>
-    </div>
-  </div>
 
-  <!-- ────── Bot Logs ────── -->
-  <div class="card full-width">
-    <div class="card-header">
-      <span class="card-title"><span class="icon">📋</span> Bot Logs</span>
-      <div class="card-actions">
-        <button class="btn btn-outline btn-sm" onclick="loadBotLogs()">↻ Refresh</button>
+      <!-- ────── Git & Deploy ────── -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title"
+            ><span class="icon">🔀</span> Git & Deploy</span
+          >
+          <div class="card-actions">
+            <button class="btn btn-outline btn-sm" onclick="loadGitStatus()">
+              ↻ Status
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="git-status-box" id="git-status-box">
+            Loading git status...
+          </div>
+          <div class="git-row">
+            <input
+              type="text"
+              id="git-message"
+              placeholder="Commit message..."
+              value="Dashboard update"
+            />
+            <button
+              class="btn btn-accent btn-sm"
+              id="btn-git-push"
+              onclick="gitPush()"
+            >
+              ⬆ Push to GitHub
+            </button>
+          </div>
+        </div>
       </div>
-    </div>
-    <div class="card-body">
-      <pre class="terminal" id="logs-terminal" style="max-height:300px;">Loading logs...</pre>
-    </div>
-  </div>
 
-</main>
+      <!-- ────── Bot Logs ────── -->
+      <div class="card full-width">
+        <div class="card-header">
+          <span class="card-title"><span class="icon">📋</span> Bot Logs</span>
+          <div class="card-actions">
+            <button class="btn btn-outline btn-sm" onclick="loadBotLogs()">
+              ↻ Refresh
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <pre class="terminal" id="logs-terminal" style="max-height: 300px">
+Loading logs...</pre
+          >
+        </div>
+      </div>
+    </main>
 
-<script src="app.js"></script>
-</body>
+    <script src="app.js"></script>
+  </body>
 </html>
