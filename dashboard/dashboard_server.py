@@ -302,7 +302,10 @@ def execution_status():
 def execution_zscore_live():
     """Get live z-score using the exact same execution pipeline as the bot."""
     try:
+        base_path = str(BASE_DIR)
         execution_path = str(EXECUTION_DIR)
+        if base_path not in sys.path:
+            sys.path.insert(0, base_path)
         if execution_path not in sys.path:
             sys.path.insert(0, execution_path)
 
