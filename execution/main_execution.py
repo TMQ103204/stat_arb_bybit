@@ -38,8 +38,7 @@ if __name__ == "__main__":
     signal_sign_positive = False
     signal_side = ""
     kill_switch = 0
-
-    # Save status
+    position_open_time = 0.0    # Save status
     save_status(status_dict)
 
     # Set leverage in case forgotten to do so on the platform
@@ -73,6 +72,15 @@ if __name__ == "__main__":
                 status_dict["message"] = "Managing new trades..."
                 save_status(status_dict)
                 kill_switch, signal_side = manage_new_trades(kill_switch)
+                if kill_switch == 1:
+                    position_open_time = time.time()
+
+            # If trades are already open but kill_switch is 0 (e.g., bot restarted), set to 1
+            if not is_manage_new_trades and kill_switch == 0:
+                kill_switch = 1
+                position_open_time = time.time()
+                status_dict["message"] = "Re-attached to open positions"
+                save_status(status_dict)
 
             # Managing open kill switch if positions change or should reach 2
             # Check for signal to be false
@@ -86,15 +94,28 @@ if __name__ == "__main__":
                 else:
                     continue
 
-                # Close positions
-                if signal_side == "positive" and zscore < 0:
+                from config_execution_api import zscore_stop_loss, time_stop_loss_hours
+
+                # 1. Close positions (Stop-Loss: Z-score divergence)
+                if abs(zscore) > float(zscore_stop_loss):
+                    logger.critical("Z-SCORE STOP LOSS REACHED: %.4f exceeds threshold %.4f", zscore, float(zscore_stop_loss))
                     kill_switch = 2
-                if signal_side == "negative" and zscore >= 0:
+
+                # 2. Close positions (Stop-Loss: Time-based)
+                elif position_open_time > 0 and (time.time() - position_open_time) > float(time_stop_loss_hours) * 3600:
+                    logger.critical("TIME STOP LOSS REACHED: Position open for > %s hours.", time_stop_loss_hours)
+                    kill_switch = 2
+
+                # 3. Close positions (Take Profit: Mean Reversion)
+                elif signal_side == "positive" and zscore < 0:
+                    kill_switch = 2
+                elif signal_side == "negative" and zscore >= 0:
                     kill_switch = 2
 
                 # Put back to zero if trades are closed
                 if is_manage_new_trades and kill_switch != 2:
                     kill_switch = 0
+                    position_open_time = 0.0
 
             # Close all active orders and positions
             if kill_switch == 2:

@@ -53,6 +53,8 @@ def manage_new_trades(kill_switch):
         hot = True
         logger.info("-- Trade Status HOT --")
         logger.info("-- Placing and Monitoring Existing Trades --")
+    else:
+        logger.info("Seeking trades... Current Z-Score: %.4f (Threshold: %s)", zscore, signal_trigger_thresh)
 
     # Place and manage trades
     if hot and kill_switch == 0:
