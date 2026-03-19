@@ -285,16 +285,26 @@ def stop_execution():
 @app.route("/api/execution/reset", methods=["POST"])
 def reset_execution():
     """Cancel all open orders and close all positions for the configured pair.
-    Runs reset_bot.py as a subprocess, streams output into execution_output,
+    Automatically stops the bot first (if running), then runs reset_bot.py,
     and returns whether the account ended up clean."""
     global execution_process, execution_output
 
-    # Don't reset while the bot is actively running
+    # Auto-stop the bot if it is still running before resetting
     if execution_process and execution_process.poll() is None:
-        return jsonify({"error": "Bot is running. Stop it before resetting."}), 409
+        if sys.platform == "win32":
+            execution_process.terminate()
+        else:
+            os.kill(execution_process.pid, signal.SIGTERM)
+        try:
+            execution_process.wait(timeout=10)
+        except Exception:
+            pass
 
     with execution_lock:
-        execution_output = ["🔄 Resetting bot — cancelling orders and closing positions..."]
+        execution_output = [
+            "⏹ Bot stopped automatically.",
+            "🔄 Resetting — cancelling orders and closing positions...",
+        ]
 
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
     try:
@@ -315,7 +325,7 @@ def reset_execution():
         status = "clean" if clean else "failed"
         with execution_lock:
             execution_output.append(
-                f"✅ Reset complete — account is CLEAN." if clean
+                "✅ Reset complete — account is CLEAN. You can now Start the bot." if clean
                 else "⚠️ Reset finished with warnings. Check logs."
             )
         return jsonify({"status": status, "output": lines, "clean": clean})
