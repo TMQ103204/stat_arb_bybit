@@ -282,6 +282,51 @@ def stop_execution():
     return jsonify({"status": "not_running"})
 
 
+@app.route("/api/execution/reset", methods=["POST"])
+def reset_execution():
+    """Cancel all open orders and close all positions for the configured pair.
+    Runs reset_bot.py as a subprocess, streams output into execution_output,
+    and returns whether the account ended up clean."""
+    global execution_process, execution_output
+
+    # Don't reset while the bot is actively running
+    if execution_process and execution_process.poll() is None:
+        return jsonify({"error": "Bot is running. Stop it before resetting."}), 409
+
+    with execution_lock:
+        execution_output = ["🔄 Resetting bot — cancelling orders and closing positions..."]
+
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+    try:
+        result = subprocess.run(
+            [sys.executable, "-u", str(EXECUTION_DIR / "reset_bot.py")],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, cwd=str(EXECUTION_DIR), env=env,
+            timeout=60,
+        )
+        lines = result.stdout.splitlines()
+        with execution_lock:
+            for line in lines:
+                execution_output.append(line)
+                if len(execution_output) > 500:
+                    execution_output.pop(0)
+
+        clean = result.returncode == 0
+        status = "clean" if clean else "failed"
+        with execution_lock:
+            execution_output.append(
+                f"✅ Reset complete — account is CLEAN." if clean
+                else "⚠️ Reset finished with warnings. Check logs."
+            )
+        return jsonify({"status": status, "output": lines, "clean": clean})
+    except subprocess.TimeoutExpired:
+        with execution_lock:
+            execution_output.append("⏱ Reset timed out after 60s.")
+        return jsonify({"error": "reset_timeout"}), 504
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/execution/status", methods=["GET"])
 def execution_status():
     global execution_process

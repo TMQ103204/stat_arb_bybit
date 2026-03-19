@@ -470,6 +470,17 @@ body {
   box-shadow: 0 8px 25px var(--danger-glow);
 }
 
+.btn-orange {
+  background: linear-gradient(135deg, #d97706, #f59e0b);
+  color: white;
+  box-shadow:
+    0 4px 15px rgba(245, 158, 11, 0.4),
+    inset 0 1px 1px rgba(255, 255, 255, 0.3);
+}
+.btn-orange:hover {
+  box-shadow: 0 8px 25px rgba(245, 158, 11, 0.6);
+}
+
 .btn-outline {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border);

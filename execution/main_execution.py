@@ -2,6 +2,8 @@
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
+import argparse
+
 import os
 import sys
 
@@ -27,6 +29,21 @@ logger = get_logger("main")
 
 """ RUN STATBOT """
 if __name__ == "__main__":
+
+    # ── CLI arguments ────────────────────────────────────────────────────────
+    parser = argparse.ArgumentParser(description="StatArb Bybit Bot")
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Cancel all orders and close all positions for current pair, then exit."
+    )
+    args = parser.parse_args()
+
+    if args.reset:
+        from reset_bot import reset_bot
+        ok = reset_bot()
+        sys.exit(0 if ok else 1)
+    # ─────────────────────────────────────────────────────────────────────────
 
     # Initial printout
     logger.info("StatBot initiated...")

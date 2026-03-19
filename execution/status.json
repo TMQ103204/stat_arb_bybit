@@ -1,4 +1,4 @@
 {
     "message": "Initial checks made...",
-    "checks": "[True, True, True, True]"
+    "checks": "[False, True, True, True]"
 }

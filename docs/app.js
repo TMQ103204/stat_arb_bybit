@@ -649,6 +649,39 @@ async function stopExecution() {
   }
 }
 
+async function resetBot() {
+  const btn = document.getElementById("btn-reset-bot");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Resetting...';
+  const term = document.getElementById("execution-terminal");
+  term.innerHTML = colorLine("🔄 Resetting bot — cancelling orders and closing positions...");
+  term.scrollTop = term.scrollHeight;
+  try {
+    const res = await api("/api/execution/reset", { method: "POST" });
+    if (res.error) {
+      toast("Reset error: " + res.error, "error");
+      term.innerHTML += "\n" + colorLine("❌ " + res.error);
+    } else {
+      // Show output lines in terminal
+      if (res.output && res.output.length) {
+        term.innerHTML = res.output.map(colorLine).join("\n");
+      }
+      if (res.clean) {
+        toast("✅ Account is CLEAN — ready for new pair", "success");
+        term.innerHTML += "\n" + colorLine("✅ Reset complete — account is CLEAN.");
+      } else {
+        toast("⚠️ Reset finished with warnings. Check the terminal.", "error");
+      }
+    }
+    term.scrollTop = term.scrollHeight;
+  } catch (e) {
+    toast("Cannot connect to local server", "error");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "🔄 Reset";
+  }
+}
+
 function updateBotUI(running) {
   const dot = document.getElementById("bot-status-dot");
   const label = document.getElementById("bot-status-label");
