@@ -298,6 +298,45 @@ def execution_status():
     return jsonify({"running": running, "status": status_data, "output": lines})
 
 
+@app.route("/api/execution/zscore-live", methods=["GET"])
+def execution_zscore_live():
+    """Get live z-score using the exact same execution pipeline as the bot."""
+    try:
+        execution_path = str(EXECUTION_DIR)
+        if execution_path not in sys.path:
+            sys.path.insert(0, execution_path)
+
+        from func_get_zscore import get_latest_zscore
+        from config_execution_api import ticker_1, ticker_2, signal_trigger_thresh, zscore_stop_loss
+
+        latest = get_latest_zscore()
+        if latest is None:
+            return jsonify({
+                "available": False,
+                "zscore": None,
+                "ticker_1": ticker_1,
+                "ticker_2": ticker_2,
+                "source": "execution_live_midprice",
+                "reason": "data_unavailable"
+            })
+
+        zscore, signal_sign_positive = latest
+        zscore = float(zscore)
+
+        return jsonify({
+            "available": True,
+            "zscore": zscore,
+            "signal_sign_positive": bool(signal_sign_positive),
+            "ticker_1": ticker_1,
+            "ticker_2": ticker_2,
+            "signal_trigger_thresh": float(signal_trigger_thresh),
+            "zscore_stop_loss": float(zscore_stop_loss),
+            "source": "execution_live_midprice"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ROUTES – Data
 # ═══════════════════════════════════════════════════════════════════════════════

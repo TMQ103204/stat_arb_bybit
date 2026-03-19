@@ -10,6 +10,7 @@ let API = localStorage.getItem("statarb_api_url") || DEFAULT_API;
 // ── State ──────────────────────────────────────────────────────────
 let strategyPolling = null;
 let executionPolling = null;
+let liveZscorePolling = null;
 let backtestChart = null;
 let connectionOk = false;
 
@@ -365,6 +366,7 @@ async function fetchDynamicBacktest(sym1, sym2) {
       (c) => c !== "" && !c.toLowerCase().includes("unnamed"),
     );
     renderBacktestChart(data, cols);
+    await loadLiveZscore();
     toast(`Chart updated for ${sym1} / ${sym2}`, "success");
   } catch (e) {
     console.error(e);
@@ -387,8 +389,44 @@ async function loadBacktest() {
       (c) => c !== "" && !c.toLowerCase().includes("unnamed"),
     );
     renderBacktestChart(data, cols);
+    await loadLiveZscore();
   } catch (e) {
     /* offline */
+  }
+}
+
+function setMetricZscore(value, source = "backtest", meta = {}) {
+  const z = Number(value);
+  if (Number.isNaN(z)) return;
+
+  const el = document.getElementById("metric-zscore");
+  el.textContent = z.toFixed(4);
+  el.className = "metric-value " + (z >= 0 ? "positive" : "negative");
+  el.dataset.source = source;
+  if (source === "live") {
+    const pair =
+      meta.ticker_1 && meta.ticker_2
+        ? `${meta.ticker_1}/${meta.ticker_2}`
+        : "execution pair";
+    const trigger = Number(meta.signal_trigger_thresh);
+    const stop = Number(meta.zscore_stop_loss);
+    const triggerText = Number.isNaN(trigger) ? "n/a" : trigger.toFixed(2);
+    const stopText = Number.isNaN(stop) ? "n/a" : stop.toFixed(2);
+    el.title = `Live execution z-score for ${pair}. Trigger: ${triggerText}, Stop: ${stopText}.`;
+  } else {
+    el.title = "Backtest z-score from cached strategy data.";
+  }
+}
+
+async function loadLiveZscore() {
+  try {
+    const res = await api("/api/execution/zscore-live");
+    if (res.error || !res.available || res.zscore === null) return false;
+
+    setMetricZscore(res.zscore, "live", res);
+    return true;
+  } catch (e) {
+    return false;
   }
 }
 
@@ -576,9 +614,7 @@ function renderBacktestChart(data, cols) {
   const lastZ = zscoreData.filter((v) => v !== null);
   if (lastZ.length > 0) {
     const z = lastZ[lastZ.length - 1];
-    const el = document.getElementById("metric-zscore");
-    el.textContent = z.toFixed(4);
-    el.className = "metric-value " + (z >= 0 ? "positive" : "negative");
+    setMetricZscore(z, "backtest");
   }
   if (symCols.length >= 2) {
     document.getElementById("metric-sym1").textContent = symCols[0];
@@ -661,6 +697,7 @@ async function checkBotStatus() {
     if (s.running) startExecutionPolling();
     if (s.status && s.status.message)
       document.getElementById("bot-message").textContent = s.status.message;
+    await loadLiveZscore();
   } catch (e) {
     /* offline */
   }
@@ -748,6 +785,9 @@ async function initDashboard() {
   checkBotStatus();
   loadGitStatus();
   loadBotLogs();
+
+  if (liveZscorePolling) clearInterval(liveZscorePolling);
+  liveZscorePolling = setInterval(loadLiveZscore, 6000);
 }
 
 document.addEventListener("DOMContentLoaded", () => {
