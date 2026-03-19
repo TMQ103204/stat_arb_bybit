@@ -170,6 +170,44 @@ def stream_process_output(proc, output_list, lock):
     proc.stdout.close()
 
 
+def kill_all_bot_processes():
+    """Kill ALL running main_execution.py processes system-wide (not just dashboard-spawned ones).
+    This prevents the 'dual bot' problem where a process started from a terminal
+    and one from the dashboard both write to the same bot.log simultaneously."""
+    import subprocess as _sp
+    killed = []
+    try:
+        # Use tasklist on Windows / ps on Unix to find all python processes
+        if sys.platform == "win32":
+            result = _sp.run(
+                ["wmic", "process", "where",
+                 "name='python.exe'", "get", "processid,commandline"],
+                capture_output=True, text=True
+            )
+            for line in result.stdout.splitlines():
+                if "main_execution.py" in line:
+                    parts = line.strip().split()
+                    pid = int(parts[-1])
+                    try:
+                        _sp.run(["taskkill", "/F", "/PID", str(pid)],
+                                capture_output=True)
+                        killed.append(pid)
+                    except Exception:
+                        pass
+        else:
+            result = _sp.run(["pgrep", "-f", "main_execution.py"],
+                             capture_output=True, text=True)
+            for pid_str in result.stdout.splitlines():
+                try:
+                    os.kill(int(pid_str), signal.SIGTERM)
+                    killed.append(int(pid_str))
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"kill_all_bot_processes error: {e}")
+    return killed
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ROUTES – Config
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -250,10 +288,14 @@ def strategy_status():
 @app.route("/api/execution/start", methods=["POST"])
 def start_execution():
     global execution_process, execution_output
+    # Kill ALL stray main_execution.py processes first (including those
+    # started from an external terminal) to prevent dual-bot log pollution.
+    killed = kill_all_bot_processes()
     with execution_lock:
-        if execution_process and execution_process.poll() is None:
-            return jsonify({"error": "Execution bot is already running"}), 409
-        execution_output = ["▶ Starting execution bot..."]
+        execution_output = []
+        if killed:
+            execution_output.append(f"⚠️ Killed {len(killed)} stray bot process(es): {killed}")
+        execution_output.append("▶ Starting execution bot...")
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     proc = subprocess.Popen(
         [sys.executable, "-u", str(EXECUTION_DIR / "main_execution.py")],
@@ -264,7 +306,7 @@ def start_execution():
     execution_process = proc
     t = threading.Thread(target=stream_process_output, args=(proc, execution_output, execution_lock), daemon=True)
     t.start()
-    return jsonify({"status": "started", "pid": proc.pid})
+    return jsonify({"status": "started", "pid": proc.pid, "killed_pids": killed})
 
 
 @app.route("/api/execution/stop", methods=["POST"])
@@ -289,22 +331,14 @@ def reset_execution():
     and returns whether the account ended up clean."""
     global execution_process, execution_output
 
-    # Auto-stop the bot if it is still running before resetting
-    if execution_process and execution_process.poll() is None:
-        if sys.platform == "win32":
-            execution_process.terminate()
-        else:
-            os.kill(execution_process.pid, signal.SIGTERM)
-        try:
-            execution_process.wait(timeout=10)
-        except Exception:
-            pass
+    # Kill ALL stray main_execution.py processes (not just dashboard-spawned ones)
+    killed = kill_all_bot_processes()
 
     with execution_lock:
-        execution_output = [
-            "⏹ Bot stopped automatically.",
-            "🔄 Resetting — cancelling orders and closing positions...",
-        ]
+        execution_output = []
+        if killed:
+            execution_output.append(f"⏹ Killed {len(killed)} bot process(es): {killed}")
+        execution_output.append("🔄 Resetting — cancelling orders and closing positions...")
 
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
     try:
