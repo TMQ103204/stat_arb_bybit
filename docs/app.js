@@ -160,6 +160,9 @@ async function loadExecutionConfig() {
     document.getElementById("e-timeframe").value = cfg.timeframe;
     document.getElementById("e-kline").value = cfg.kline_limit;
     document.getElementById("e-zscore-win").value = cfg.z_score_window;
+    document.getElementById("e-market-zscore").value = cfg.market_order_zscore_thresh ?? 2.0;
+    document.getElementById("e-min-profit").value = cfg.min_profit_pct ?? 0.5;
+    document.getElementById("e-taker-fee").value = cfg.taker_fee_pct ?? 0.055;
   } catch (e) {
     /* offline */
   }
@@ -184,6 +187,9 @@ async function saveExecutionConfig() {
     timeframe: parseInt(document.getElementById("e-timeframe").value),
     kline_limit: parseInt(document.getElementById("e-kline").value),
     z_score_window: parseInt(document.getElementById("e-zscore-win").value),
+    market_order_zscore_thresh: parseFloat(document.getElementById("e-market-zscore").value),
+    min_profit_pct: parseFloat(document.getElementById("e-min-profit").value),
+    taker_fee_pct: parseFloat(document.getElementById("e-taker-fee").value),
   };
   try {
     const res = await api("/api/config/execution", {

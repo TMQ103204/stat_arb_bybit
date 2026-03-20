@@ -134,6 +134,13 @@ def parse_execution_config():
     config["kline_limit"] = int(m.group(1)) if m else 200
     m = re.search(r'^z_score_window\s*=\s*(\d+)', content, re.MULTILINE)
     config["z_score_window"] = int(m.group(1)) if m else 21
+    # Hybrid order strategy params
+    m = re.search(r'^market_order_zscore_thresh\s*=\s*([\d.]+)', content, re.MULTILINE)
+    config["market_order_zscore_thresh"] = float(m.group(1)) if m else 2.0
+    m = re.search(r'^min_profit_pct\s*=\s*([\d.]+)', content, re.MULTILINE)
+    config["min_profit_pct"] = float(m.group(1)) if m else 0.5
+    m = re.search(r'^taker_fee_pct\s*=\s*([\d.]+)', content, re.MULTILINE)
+    config["taker_fee_pct"] = float(m.group(1)) if m else 0.055
     return config
 
 
@@ -156,6 +163,15 @@ def write_execution_config(config):
     content = re.sub(r'^timeframe\s*=\s*\d+', f'timeframe = {config["timeframe"]}', content, flags=re.MULTILINE)
     content = re.sub(r'^kline_limit\s*=\s*\d+', f'kline_limit = {config["kline_limit"]}', content, flags=re.MULTILINE)
     content = re.sub(r'^z_score_window\s*=\s*\d+', f'z_score_window = {config["z_score_window"]}', content, flags=re.MULTILINE)
+    if "market_order_zscore_thresh" in config:
+        content = re.sub(r'^market_order_zscore_thresh\s*=\s*[\d.]+',
+                         f'market_order_zscore_thresh = {config["market_order_zscore_thresh"]}', content, flags=re.MULTILINE)
+    if "min_profit_pct" in config:
+        content = re.sub(r'^min_profit_pct\s*=\s*[\d.]+',
+                         f'min_profit_pct = {config["min_profit_pct"]}', content, flags=re.MULTILINE)
+    if "taker_fee_pct" in config:
+        content = re.sub(r'^taker_fee_pct\s*=\s*[\d.]+',
+                         f'taker_fee_pct = {config["taker_fee_pct"]}', content, flags=re.MULTILINE)
     EXECUTION_CONFIG.write_text(content, encoding="utf-8")
 
 

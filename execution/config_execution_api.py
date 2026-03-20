@@ -14,18 +14,26 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 # CONFIG VARIABLES
 # mode options: "test" (testnet), "demo" (mainnet demo - real prices, virtual money), "live" (real money)
 mode = "demo"
-ticker_1 = "ARKUSDT"
-ticker_2 = "MIRAUSDT"
+ticker_1 = "CYSUSDT"
+ticker_2 = "KASUSDT"
 signal_positive_ticker = ticker_2
 signal_negative_ticker = ticker_1
 
 limit_order_basis = True # will ensure positions (except for Close) will be placed on limit basis
 
-tradeable_capital_usdt = 100 # total tradeable capital to be split between both pairs
+tradeable_capital_usdt = 1000 # total tradeable capital to be split between both pairs
 stop_loss_fail_safe = 0.15 # stop loss at market order in case of drastic event
 signal_trigger_thresh = 1.1 # z-score threshold which determines trade (must be above zero)
 zscore_stop_loss = 3      # emergency stop-loss: absolute z-score beyond which all positions are closed at market
 time_stop_loss_hours = 48 # maximum time in hours to hold a position before emergency close
+
+# ── Hybrid order strategy ──────────────────────────────────────────────────
+# If |z_score| >= market_order_zscore_thresh AND expected net profit >= min_profit_pct
+# the bot will use Market orders instead of aggressive Limit orders.
+# Set market_order_zscore_thresh very high (e.g. 99) to disable market order entirely.
+market_order_zscore_thresh = 2.0   # |z| threshold to consider market order (above signal_trigger_thresh)
+min_profit_pct            = 0.5    # minimum expected net profit % of capital (after fees) to allow market order
+taker_fee_pct             = 0.055  # Bybit taker fee per side (%)
 
 timeframe = 60 # make sure matches your strategy
 kline_limit = 200 # make sure matches your strategy

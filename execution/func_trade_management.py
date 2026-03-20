@@ -125,11 +125,11 @@ def manage_new_trades(kill_switch):
 
                 if counts_long == 0:
                     future_long = executor.submit(
-                        initialise_order_execution, long_ticker, "Long", initial_capital_usdt, force_market_long
+                        initialise_order_execution, long_ticker, "Long", initial_capital_usdt, force_market_long, zscore
                     )
                 if counts_short == 0:
                     future_short = executor.submit(
-                        initialise_order_execution, short_ticker, "Short", initial_capital_usdt, force_market_short
+                        initialise_order_execution, short_ticker, "Short", initial_capital_usdt, force_market_short, zscore
                     )
 
                 if future_long is not None:

@@ -265,6 +265,18 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
               <label>Z-Score Window</label>
               <input type="number" id="e-zscore-win" value="21" />
             </div>
+            <div class="form-group" title="Use Market order when |z-score| reaches this level (set to 99 to disable)">
+              <label>Market Order Z ⚡</label>
+              <input type="number" id="e-market-zscore" value="2.0" step="0.1" />
+            </div>
+            <div class="form-group" title="Minimum expected net profit % after fees required to allow market order">
+              <label>Min Profit % 💰</label>
+              <input type="number" id="e-min-profit" value="0.5" step="0.1" />
+            </div>
+            <div class="form-group" title="Bybit taker fee per side (%) — used in profit calculation">
+              <label>Taker Fee %</label>
+              <input type="number" id="e-taker-fee" value="0.055" step="0.005" />
+            </div>
           </div>
         </div>
       </div>
