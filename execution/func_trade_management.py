@@ -14,6 +14,10 @@ from logger_setup import get_logger
 import time
 import concurrent.futures
 
+# Number of retries before escalating a limit order to a market order
+# (must be < max_retries so there is at least one market-order attempt)
+FORCE_MARKET_AFTER_RETRY = 3
+
 logger = get_logger("trade_mgmt")
 
 
@@ -111,6 +115,7 @@ def manage_new_trades(kill_switch):
         force_market_long = False
         force_market_short = False
         max_retries = 5  # Maximum retry attempts before giving up
+        # FORCE_MARKET_AFTER_RETRY (=3) < max_retries (=5) so market kick-in happens before giving up
         while kill_switch == 0:
 
             # Place both legs simultaneously to minimise spread between entry prices
@@ -226,16 +231,42 @@ def manage_new_trades(kill_switch):
                             logger.error("Max retries reached for long order. Stopping...")
                             session_private.cancel_all_orders(category="linear", symbol=signal_positive_ticker)
                             session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
+                            # ── Half-position guard ────────────────────────────────────────────
+                            short_filled = order_status_short in ("Position Filled", "Trade Complete")
+                            if short_filled:
+                                logger.critical(
+                                    "HALF-POSITION DETECTED: Short leg filled but Long failed after "
+                                    "%d retries. Closing all positions to avoid unhedged exposure.",
+                                    max_retries
+                                )
+                                close_all_positions(kill_switch)
+                            else:
+                                logger.warning(
+                                    "Max retries reached for long order and no position opened. "
+                                    "Resetting to seek trades."
+                                )
+                                kill_switch = 0
+                                continue
+                            # ──────────────────────────────────────────────────────────────────
                             kill_switch = 1
                         else:
                             counts_long = 0
                             is_retry_long = True
-                            # Opposite leg already filled — escalate to Market Order to close the leg gap
+                            # Escalate to Market Order when:
+                            #   a) opposite leg already filled (leg gap risk), OR
+                            #   b) retry count has reached the escalation threshold
                             if order_status_short in ("Position Filled", "Trade Complete"):
                                 force_market_long = True
                                 logger.warning(
                                     "Short leg already filled — forcing Market Order for long retry "
                                     "to eliminate leg gap."
+                                )
+                            elif retry_long >= FORCE_MARKET_AFTER_RETRY:
+                                force_market_long = True
+                                logger.warning(
+                                    "Long order retry %d/%d — escalating to Market Order "
+                                    "(PostOnly kept being rejected).",
+                                    retry_long, max_retries
                                 )
 
                     # If order cancelled for short - try again (with retry limit)
@@ -246,16 +277,42 @@ def manage_new_trades(kill_switch):
                             logger.error("Max retries reached for short order. Stopping...")
                             session_private.cancel_all_orders(category="linear", symbol=signal_positive_ticker)
                             session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
+                            # ── Half-position guard ────────────────────────────────────────────
+                            long_filled = order_status_long in ("Position Filled", "Trade Complete")
+                            if long_filled:
+                                logger.critical(
+                                    "HALF-POSITION DETECTED: Long leg filled but Short failed after "
+                                    "%d retries. Closing all positions to avoid unhedged exposure.",
+                                    max_retries
+                                )
+                                close_all_positions(kill_switch)
+                            else:
+                                logger.warning(
+                                    "Max retries reached for short order and no position opened. "
+                                    "Resetting to seek trades."
+                                )
+                                kill_switch = 0
+                                continue
+                            # ──────────────────────────────────────────────────────────────────
                             kill_switch = 1
                         else:
                             counts_short = 0
                             is_retry_short = True
-                            # Opposite leg already filled — escalate to Market Order to close the leg gap
+                            # Escalate to Market Order when:
+                            #   a) opposite leg already filled (leg gap risk), OR
+                            #   b) retry count has reached the escalation threshold
                             if order_status_long in ("Position Filled", "Trade Complete"):
                                 force_market_short = True
                                 logger.warning(
                                     "Long leg already filled — forcing Market Order for short retry "
                                     "to eliminate leg gap."
+                                )
+                            elif retry_short >= FORCE_MARKET_AFTER_RETRY:
+                                force_market_short = True
+                                logger.warning(
+                                    "Short order retry %d/%d — escalating to Market Order "
+                                    "(PostOnly kept being rejected).",
+                                    retry_short, max_retries
                                 )
 
                 else:
