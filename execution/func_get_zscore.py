@@ -1,5 +1,3 @@
-# from config_ws_connect import subs_public
-# from config_ws_connect import ws_public
 from config_execution_api import session_public, ticker_1, ticker_2
 from func_calcultions import get_trade_details
 from func_price_calls import get_latest_klines

@@ -2,8 +2,8 @@ from func_price_klines import get_price_klines
 from func_plot_trends import plot_trends
 
 # 1. Điền 2 đồng coin mà bạn muốn kiểm tra vào đây (nhớ thêm hậu tố USDT)
-coin_1 = "KERNELUSDT"
-coin_2 = "ELSAUSDT"
+coin_1 = ""
+coin_2 = ""
 
 def main():
     print(f"Đang tải dữ liệu giá klines cho {coin_1} và {coin_2}...")
