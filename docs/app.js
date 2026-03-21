@@ -818,29 +818,35 @@ let currentPerfStartMs = null; // null → backend uses PERF_DEFAULT_START_MS
 
 // ── Data loader ────────────────────────────────────────────────────
 async function loadPerformance(startMs = null) {
+  // ── Reset display first so stale values never linger ──────────────
+  const pnlEl  = document.getElementById("perf-pnl");
+  const pctEl  = document.getElementById("perf-pct");
+  const cntEl  = document.getElementById("perf-count");
+  if (pnlEl) { pnlEl.textContent = "— USDT"; pnlEl.className = "perf-value"; }
+  if (pctEl) { pctEl.textContent = "—";      pctEl.className = "perf-value"; }
+  if (cntEl)   cntEl.textContent = "—";
+
   try {
     const url = startMs != null
       ? `/api/performance?startMs=${startMs}`
       : "/api/performance";
     const res = await api(url);
-    if (res.error) return;
+    if (res.error) return;   // leaves "—" which is intentional
 
     const modeMap = { demo: "Demo", live: "Live", test: "Test" };
     document.getElementById("perf-mode").textContent =
       modeMap[res.mode] || res.mode;
 
-    const pnlEl = document.getElementById("perf-pnl");
     const pnl = res.total_pnl;
     pnlEl.textContent = (pnl >= 0 ? "+" : "") + pnl.toFixed(2) + " USDT";
     pnlEl.className = "perf-value " + (pnl >= 0 ? "perf-positive" : "perf-negative");
 
-    const pctEl = document.getElementById("perf-pct");
     const pct = res.pnl_pct;
     pctEl.textContent = (pct >= 0 ? "+" : "") + pct.toFixed(3) + "%";
     pctEl.className = "perf-value " + (pct >= 0 ? "perf-positive" : "perf-negative");
 
-    document.getElementById("perf-count").textContent = res.trade_count;
-  } catch (e) { /* offline */ }
+    cntEl.textContent = res.trade_count;
+  } catch (e) { /* offline — "—" already shown */ }
 }
 
 // ── Period preset buttons ─────────────────────────────────────────
