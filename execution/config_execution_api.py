@@ -40,16 +40,21 @@ kline_limit = 200 # make sure matches your strategy
 z_score_window = 21 # make sure matches your strategy
 
 # API KEYS from .env
-api_key_mainnet = os.getenv("API_KEY_MAINNET", "")
+api_key_demo     = os.getenv("API_KEY_DEMO", "")
+api_secret_demo  = os.getenv("API_SECRET_DEMO", "")
+api_key_mainnet  = os.getenv("API_KEY_MAINNET", "")
 api_secret_mainnet = os.getenv("API_SECRET_MAINNET", "")
-api_key_testnet = os.getenv("API_KEY_TESTNET", "")
+api_key_testnet  = os.getenv("API_KEY_TESTNET", "")
 api_secret_testnet = os.getenv("API_SECRET_TESTNET", "")
 
 # SELECTED API
 if mode == "test":
     api_key = api_key_testnet
     api_secret = api_secret_testnet
-else:
+elif mode == "demo":
+    api_key = api_key_demo
+    api_secret = api_secret_demo
+else:  # "live"
     api_key = api_key_mainnet
     api_secret = api_secret_mainnet
 
