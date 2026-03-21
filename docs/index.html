@@ -32,6 +32,48 @@
         <h1>Quant Trading Dashboard</h1>
         <span class="tag">Bybit</span>
       </div>
+
+      <!-- ── P&L Performance (center) ── -->
+      <div class="header-perf" id="header-perf">
+        <!-- Metrics row -->
+        <div class="perf-metrics-row">
+          <div class="perf-item">
+            <span class="perf-label">P&L · <span id="perf-mode">—</span></span>
+            <span class="perf-value" id="perf-pnl">— USDT</span>
+          </div>
+          <div class="perf-sep"></div>
+          <div class="perf-item">
+            <span class="perf-label">% Efficiency</span>
+            <span class="perf-value" id="perf-pct">—</span>
+          </div>
+          <div class="perf-sep"></div>
+          <div class="perf-item">
+            <span class="perf-label">Closed Trades</span>
+            <span class="perf-value" id="perf-count">—</span>
+          </div>
+        </div>
+        <!-- Filter row -->
+        <div class="perf-filter-row">
+          <button class="perf-period-btn" data-period="1D"  onclick="setPerfPeriod('1D')">1D</button>
+          <button class="perf-period-btn" data-period="7D"  onclick="setPerfPeriod('7D')">7D</button>
+          <button class="perf-period-btn" data-period="30D" onclick="setPerfPeriod('30D')">30D</button>
+          <button class="perf-period-btn" data-period="6M"  onclick="setPerfPeriod('6M')">6M</button>
+          <button class="perf-period-btn" data-period="1Y"  onclick="setPerfPeriod('1Y')">1Y</button>
+          <button class="perf-period-btn" data-period="YTD" onclick="setPerfPeriod('YTD')">YTD</button>
+          <button class="perf-period-btn active" data-period="ALL" onclick="setPerfPeriod('ALL')">ALL</button>
+          <span class="perf-filter-sep"></span>
+          <div class="perf-date-wrap">
+            <span class="perf-date-icon">📅</span>
+            <input type="text" id="perf-date-picker" class="perf-date-input"
+                   placeholder="DD-MM-YYYY" maxlength="10"
+                   oninput="autoFormatDateInput(this)"
+                   onblur="setPerfCustomDate(this.value)"
+                   onkeydown="if(event.key==='Enter'){setPerfCustomDate(this.value)}"
+                   title="Enter start date (DD-MM-YYYY)" />
+          </div>
+        </div>
+      </div>
+
       <div class="header-status">
         <div class="status-indicator" title="Local server connection">
           <span class="status-dot error" id="conn-dot"></span>
@@ -44,6 +86,7 @@
         <span class="header-time" id="header-time">--:--:--</span>
       </div>
     </header>
+
 
     <!-- ═══ DASHBOARD GRID ═══ -->
     <main class="dashboard">

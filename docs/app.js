@@ -800,8 +800,110 @@ async function loadBotLogs() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// PERFORMANCE (P&L)
+// ═══════════════════════════════════════════════════════════════════
+
+// Duration in ms for each relative preset
+const PERF_PERIODS = {
+  "1D":  1   * 24 * 60 * 60 * 1000,
+  "7D":  7   * 24 * 60 * 60 * 1000,
+  "30D": 30  * 24 * 60 * 60 * 1000,
+  "6M":  180 * 24 * 60 * 60 * 1000,
+  "1Y":  365 * 24 * 60 * 60 * 1000,
+};
+// Default start = bot launch date (20/03/2026 16:00 ICT)
+const PERF_DEFAULT_START_MS = 1773997200000;
+
+let currentPerfStartMs = null; // null → server uses PERF_DEFAULT_START_MS
+
+async function loadPerformance(startMs = null) {
+  try {
+    const url = startMs != null
+      ? `/api/performance?startMs=${startMs}`
+      : "/api/performance";
+    const res = await api(url);
+    if (res.error) return;
+
+    const modeMap = { demo: "Demo", live: "Live", test: "Test" };
+    document.getElementById("perf-mode").textContent =
+      modeMap[res.mode] || res.mode;
+
+    const pnlEl = document.getElementById("perf-pnl");
+    const pnl = res.total_pnl;
+    pnlEl.textContent = (pnl >= 0 ? "+" : "") + pnl.toFixed(2) + " USDT";
+    pnlEl.className =
+      "perf-value " + (pnl >= 0 ? "perf-positive" : "perf-negative");
+
+    const pctEl = document.getElementById("perf-pct");
+    const pct = res.pnl_pct;
+    pctEl.textContent = (pct >= 0 ? "+" : "") + pct.toFixed(3) + "%";
+    pctEl.className =
+      "perf-value " + (pct >= 0 ? "perf-positive" : "perf-negative");
+
+    document.getElementById("perf-count").textContent = res.trade_count;
+  } catch (e) {
+    /* offline — leave dashes */
+  }
+}
+
+/** Activate a preset period button and reload performance data. */
+function setPerfPeriod(period) {
+  document.querySelectorAll(".perf-period-btn").forEach((b) =>
+    b.classList.remove("active")
+  );
+  const btn = document.querySelector(`.perf-period-btn[data-period="${period}"]`);
+  if (btn) btn.classList.add("active");
+
+  const dp = document.getElementById("perf-date-picker");
+  if (dp) dp.value = "";
+
+  if (period === "ALL") {
+    // All data since bot launch date
+    currentPerfStartMs = null;
+    loadPerformance(null);
+  } else if (period === "YTD") {
+    // Start of current year at midnight ICT (UTC+7)
+    const yr = new Date().getFullYear();
+    currentPerfStartMs = new Date(`${yr}-01-01T00:00:00+07:00`).getTime();
+    loadPerformance(currentPerfStartMs);
+  } else {
+    currentPerfStartMs = Date.now() - PERF_PERIODS[period];
+    loadPerformance(currentPerfStartMs);
+  }
+}
+
+/** Auto-format text input as DD-MM-YYYY while typing. */
+function autoFormatDateInput(input) {
+  let raw = input.value.replace(/\D/g, "").slice(0, 8);
+  let result = raw;
+  if (raw.length > 2) result = raw.slice(0, 2) + "-" + raw.slice(2);
+  if (raw.length > 4) result = result.slice(0, 5) + "-" + raw.slice(4, 8);
+  input.value = result;
+}
+
+/** Parse DD-MM-YYYY and trigger filter; treats date as 00:00 ICT (UTC+7). */
+function setPerfCustomDate(dateStr) {
+  if (!dateStr || dateStr.length < 10) return;
+  const parts = dateStr.split("-");
+  if (parts.length !== 3) return;
+  const [dd, mm, yyyy] = parts;
+  if (!dd || !mm || !yyyy || yyyy.length !== 4) return;
+  const ms = new Date(`${yyyy}-${mm}-${dd}T00:00:00+07:00`).getTime();
+  if (isNaN(ms)) return;
+
+  document.querySelectorAll(".perf-period-btn").forEach((b) =>
+    b.classList.remove("active")
+  );
+
+  currentPerfStartMs = ms;
+  loadPerformance(ms);
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════════
+
+let perfPolling = null;
 
 async function initDashboard() {
   updateConnectionUI(false);
@@ -824,9 +926,13 @@ async function initDashboard() {
   checkBotStatus();
   loadGitStatus();
   loadBotLogs();
+  loadPerformance(); // uses default PERF_DEFAULT_START_MS
 
   if (liveZscorePolling) clearInterval(liveZscorePolling);
   liveZscorePolling = setInterval(loadLiveZscore, 6000);
+
+  if (perfPolling) clearInterval(perfPolling);
+  perfPolling = setInterval(() => loadPerformance(currentPerfStartMs), 60000);
 }
 
 document.addEventListener("DOMContentLoaded", () => {

@@ -121,7 +121,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 36px;
+  gap: 16px;
+  padding: 10px 28px;
+  min-height: 72px;
   background: rgba(3, 7, 18, 0.7);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
@@ -130,6 +132,7 @@ body {
 }
 
 .header-brand {
+  flex: 1 0 auto;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -173,9 +176,11 @@ body {
 }
 
 .header-status {
+  flex: 1 0 auto;
   display: flex;
   align-items: center;
-  gap: 24px;
+  justify-content: flex-end;
+  gap: 20px;
 }
 
 .status-indicator {
@@ -231,6 +236,158 @@ body {
   padding: 6px 14px;
   border-radius: 20px;
   border: 1px solid var(--border);
+}
+
+/* ── Header Performance Panel ───────────────────────────────────── */
+.header-perf {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 14px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow:
+    0 2px 12px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  flex: 0 0 auto;
+  /* no absolute positioning — sits naturally in flex row */
+}
+
+/* Metrics row (3 chips + separators) */
+.perf-metrics-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.perf-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 0 18px;
+}
+
+.perf-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.perf-value {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  transition: color 0.4s, text-shadow 0.4s;
+  white-space: nowrap;
+}
+
+.perf-value.perf-positive {
+  color: var(--success);
+  text-shadow: 0 0 14px var(--success-glow);
+}
+
+.perf-value.perf-negative {
+  color: var(--danger);
+  text-shadow: 0 0 14px var(--danger-glow);
+}
+
+.perf-sep {
+  width: 1px;
+  height: 32px;
+  background: rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+/* Filter row */
+.perf-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.perf-period-btn {
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.perf-period-btn:hover {
+  border-color: var(--brand-light);
+  color: var(--text-primary);
+  background: rgba(99, 102, 241, 0.12);
+}
+.perf-period-btn.active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+  box-shadow: 0 0 8px var(--brand-glow);
+}
+
+.perf-filter-sep {
+  width: 1px;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+
+.perf-date-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(3, 7, 18, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 2px 6px;
+  transition: border-color 0.2s;
+}
+.perf-date-wrap:hover,
+.perf-date-wrap:focus-within {
+  border-color: var(--brand-light);
+}
+
+.perf-date-icon {
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.7;
+  pointer-events: none;
+  user-select: none;
+}
+
+.perf-date-input {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  width: 76px;
+  padding: 0;
+  outline: none;
+  cursor: text;
+}
+.perf-date-input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+.perf-date-input:focus {
+  color: var(--text-primary);
 }
 
 /* ── Layout ────────────────────────────────────────────────────────── */

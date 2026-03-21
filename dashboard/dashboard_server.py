@@ -590,6 +590,169 @@ def git_push():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# ROUTES – Performance (P&L)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Start time: 20/03/2026 16:00 ICT (UTC+7) = 20/03/2026 09:00 UTC = 1773997200000 ms
+# Verification: 2026-01-01 UTC = 1767225600, + 78 days = 1773964800, + 9h = 1773997200
+PERF_START_MS = 1773997200000
+
+
+def _make_session(mode, api_key, api_secret):
+    """Create a Bybit HTTP session for the given mode."""
+    from pybit.unified_trading import HTTP as _HTTP
+    if mode == "test":
+        return _HTTP(testnet=True, api_key=api_key, api_secret=api_secret)
+    elif mode == "demo":
+        return _HTTP(demo=True, api_key=api_key, api_secret=api_secret)
+    else:
+        return _HTTP(api_key=api_key, api_secret=api_secret)
+
+
+def _fetch_all_closed_pnl(session, fetch_start_ms):
+    """Paginate through Bybit closed-pnl starting from fetch_start_ms.
+    Returns ALL rows without client-side filtering (caller applies user filter).
+    """
+    all_rows = []
+    errors = []
+    cursor = ""
+    while True:
+        kwargs = dict(category="linear", startTime=fetch_start_ms, limit=200)
+        if cursor:
+            kwargs["cursor"] = cursor
+        try:
+            resp = session.get_closed_pnl(**kwargs)
+        except Exception as exc:
+            errors.append(f"get_closed_pnl exception: {exc}")
+            break
+        ret = resp.get("retCode", -1)
+        if ret != 0:
+            errors.append(f"get_closed_pnl retCode={ret} msg={resp.get('retMsg', '')}")
+            break
+        result = resp.get("result", {})
+        rows = result.get("list", [])
+        all_rows.extend(rows)
+        cursor = result.get("nextPageCursor", "")
+        if not cursor or not rows:
+            break
+    return all_rows, errors
+
+
+def _fetch_all_executions(session, fetch_start_ms):
+    """Paginate through Bybit execution list starting from fetch_start_ms.
+    Returns ALL rows without client-side filtering (caller applies user filter).
+    """
+    all_rows = []
+    errors = []
+    cursor = ""
+    while True:
+        kwargs = dict(category="linear", startTime=fetch_start_ms, limit=200)
+        if cursor:
+            kwargs["cursor"] = cursor
+        try:
+            resp = session.get_executions(**kwargs)
+        except Exception as exc:
+            errors.append(f"get_executions exception: {exc}")
+            break
+        ret = resp.get("retCode", -1)
+        if ret != 0:
+            errors.append(f"get_executions retCode={ret} msg={resp.get('retMsg', '')}")
+            break
+        result = resp.get("result", {})
+        rows = result.get("list", [])
+        all_rows.extend(rows)
+        cursor = result.get("nextPageCursor", "")
+        if not cursor or not rows:
+            break
+    return all_rows, errors
+
+
+@app.route("/api/performance", methods=["GET"])
+def get_performance():
+    """
+    Return real P&L performance since 16:00 20/03/2026 ICT.
+    Automatically uses Demo or Mainnet credentials based on execution config mode.
+    """
+    try:
+        # ── Dynamic startMs from frontend (time-range filter) ──────────
+        start_ms_param = request.args.get("startMs")
+        if start_ms_param:
+            try:
+                start_ms = int(start_ms_param)
+            except (ValueError, TypeError):
+                start_ms = PERF_START_MS
+        else:
+            start_ms = PERF_START_MS
+
+        # ── Read execution config ──────────────────────────────────────
+        cfg = parse_execution_config()
+        mode = cfg.get("mode", "demo")
+
+        # Load .env
+        from dotenv import load_dotenv as _load_dotenv
+        _load_dotenv(str(BASE_DIR / ".env"))
+
+        if mode == "test":
+            api_key    = os.getenv("API_KEY_TESTNET", "")
+            api_secret = os.getenv("API_SECRET_TESTNET", "")
+        elif mode == "demo":
+            api_key    = os.getenv("API_KEY_DEMO", "")
+            api_secret = os.getenv("API_SECRET_DEMO", "")
+        else:
+            api_key    = os.getenv("API_KEY_MAINNET", "")
+            api_secret = os.getenv("API_SECRET_MAINNET", "")
+
+        if not api_key or not api_secret:
+            return jsonify({"error": f"No API key configured for mode '{mode}'"}), 400
+
+        session = _make_session(mode, api_key, api_secret)
+
+        # ── Fetch raw data from bot-launch date ───────────────────────
+        # Always fetch everything from PERF_START_MS regardless of user filter.
+        # User's startMs is applied client-side below using the correct close-time field.
+        all_pnl_rows, pnl_errors = _fetch_all_closed_pnl(session, PERF_START_MS)
+        all_exec_rows, exec_errors = _fetch_all_executions(session, PERF_START_MS)
+
+        # ── Apply user time filter ────────────────────────────────────
+        # Closed P&L: filter by updatedTime (= position CLOSE time)
+        # Executions: filter by execTime
+        closed_pnl_rows = [
+            r for r in all_pnl_rows
+            if int(r.get("updatedTime", 0)) >= start_ms
+        ]
+        exec_rows = [
+            r for r in all_exec_rows
+            if int(r.get("execTime", 0)) >= start_ms
+        ]
+
+        # ── Aggregate ────────────────────────────────────────────────
+        total_pnl = sum(float(r.get("closedPnl", 0)) for r in closed_pnl_rows)
+        total_exec_value = sum(float(r.get("execValue", 0)) for r in exec_rows)
+
+        # ── % Efficiency ──────────────────────────────────────────────
+        pnl_pct = (total_pnl / total_exec_value * 100) if total_exec_value > 0 else 0.0
+
+        resp_data = {
+            "mode":             mode,
+            "total_pnl":        round(total_pnl, 4),
+            "total_exec_value": round(total_exec_value, 4),
+            "pnl_pct":          round(pnl_pct, 4),
+            "trade_count":      len(closed_pnl_rows),
+            "exec_count":       len(exec_rows),
+            "filter_ms":        start_ms,
+        }
+        # Include API errors in response (for debugging, non-fatal)
+        if pnl_errors or exec_errors:
+            resp_data["api_warnings"] = pnl_errors + exec_errors
+
+        return jsonify(resp_data)
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # ROUTES – Serve Frontend
 # ═══════════════════════════════════════════════════════════════════════════════
 
