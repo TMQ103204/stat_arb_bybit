@@ -817,12 +817,10 @@ let currentPerfEndMs   = null; // null → no upper bound (preset buttons)
 
 // ── Data loader ────────────────────────────────────────────────────
 async function loadPerformance(startMs = null, endMs = null) {
-  // ── Reset display first so stale values never linger ──────────────
-  const pnlEl  = document.getElementById("perf-pnl");
+  // ── Reset display so stale values never linger ─────────────────────
   const pctEl  = document.getElementById("perf-pct");
   const cntEl  = document.getElementById("perf-count");
-  if (pnlEl) { pnlEl.textContent = "— USDT"; pnlEl.className = "perf-value"; }
-  if (pctEl) { pctEl.textContent = "—";      pctEl.className = "perf-value"; }
+  if (pctEl) { pctEl.textContent = "—"; pctEl.className = "perf-value"; }
   if (cntEl)   cntEl.textContent = "—";
 
   try {
@@ -837,15 +835,11 @@ async function loadPerformance(startMs = null, endMs = null) {
     document.getElementById("perf-mode").textContent =
       modeMap[res.mode] || res.mode;
 
-    const pnl = res.total_pnl;
-    pnlEl.textContent = (pnl >= 0 ? "+" : "") + pnl.toFixed(2) + " USDT";
-    pnlEl.className = "perf-value " + (pnl >= 0 ? "perf-positive" : "perf-negative");
-
     const pct = res.pnl_pct;
     pctEl.textContent = (pct >= 0 ? "+" : "") + pct.toFixed(3) + "%";
     pctEl.className = "perf-value " + (pct >= 0 ? "perf-positive" : "perf-negative");
 
-    cntEl.textContent = res.trade_count;
+    cntEl.textContent = res.pair_count;
   } catch (e) { /* offline — "—" already shown */ }
 }
 

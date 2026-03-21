@@ -743,25 +743,39 @@ def get_performance():
                 if int(r.get("execTime", 0)) >= start_ms
             ]
 
-        # ── Aggregate ────────────────────────────────────────────────
-        total_pnl = sum(float(r.get("closedPnl", 0)) for r in closed_pnl_rows)
-        total_exec_value = sum(float(r.get("execValue", 0)) for r in exec_rows)
+        # ── Aggregate ─────────────────────────────────────────────────
+        from collections import defaultdict
 
-        # ── % Efficiency ──────────────────────────────────────────────
-        pnl_pct = (total_pnl / total_exec_value * 100) if total_exec_value > 0 else 0.0
+        total_pnl = sum(float(r.get("closedPnl", 0)) for r in closed_pnl_rows)
+
+        # ── % Efficiency: total_pnl / max_pair_capital × 100 ──────────
+        # Pair capital = sum of cumEntryValue for all legs that closed at the
+        # same timestamp (same pair round). We take the MAX across all rounds
+        # so the denominator reflects the largest capital commitment used.
+        groups = defaultdict(list)
+        for row in closed_pnl_rows:
+            groups[row.get("updatedTime", "0")].append(row)
+
+        pair_capitals = []
+        for rows_in_group in groups.values():
+            cap = sum(float(r.get("cumEntryValue", 0)) for r in rows_in_group)
+            pair_capitals.append(cap)
+
+        max_capital = max(pair_capitals) if pair_capitals else 0.0
+        pair_count  = len(groups)       # unique pair rounds, not individual orders
+        pnl_pct     = (total_pnl / max_capital * 100) if max_capital > 0 else 0.0
 
         resp_data = {
-            "mode":             mode,
-            "total_pnl":        round(total_pnl, 4),
-            "total_exec_value": round(total_exec_value, 4),
-            "pnl_pct":          round(pnl_pct, 4),
-            "trade_count":      len(closed_pnl_rows),
-            "exec_count":       len(exec_rows),
-            "filter_ms":        start_ms,
+            "mode":         mode,
+            "total_pnl":    round(total_pnl, 4),
+            "max_capital":  round(max_capital, 4),
+            "pnl_pct":      round(pnl_pct, 4),
+            "pair_count":   pair_count,
+            "filter_ms":    start_ms,
         }
         # Include API errors in response (for debugging, non-fatal)
-        if pnl_errors or exec_errors:
-            resp_data["api_warnings"] = pnl_errors + exec_errors
+        if pnl_errors:
+            resp_data["api_warnings"] = pnl_errors
 
         return jsonify(resp_data)
 
