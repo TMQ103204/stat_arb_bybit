@@ -752,9 +752,12 @@ def get_performance():
         # Pair capital = sum of cumEntryValue for all legs that closed at the
         # same timestamp (same pair round). We take the MAX across all rounds
         # so the denominator reflects the largest capital commitment used.
-        groups = defaultdict(list)
+        groups: dict = {}
         for row in closed_pnl_rows:
-            groups[row.get("updatedTime", "0")].append(row)
+            # Group at second-level precision so both legs of one pair round
+            # (which may differ by a few ms) collapse into the same group.
+            group_key = int(row.get("updatedTime", "0")) // 1000
+            groups.setdefault(group_key, []).append(row)
 
         pair_capitals = []
         for rows_in_group in groups.values():
