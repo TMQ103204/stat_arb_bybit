@@ -365,7 +365,7 @@ body {
 .perf-cal-panel {
   display: none;
   position: absolute;
-  bottom: calc(100% + 10px);
+  top: calc(100% + 6px);
   right: 0;
   width: 226px;
   background: rgba(10, 14, 28, 0.97);
