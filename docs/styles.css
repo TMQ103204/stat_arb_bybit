@@ -449,9 +449,6 @@ body {
   gap: 2px;
 }
 
-.perf-cal-blank {
-  /* empty cell */
-}
 
 .perf-cal-day {
   background: transparent;

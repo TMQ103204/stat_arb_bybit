@@ -811,13 +811,12 @@ const PERF_PERIODS = {
   "6M":  180 * 24 * 60 * 60 * 1000,
   "1Y":  365 * 24 * 60 * 60 * 1000,
 };
-// Default window = bot launch date (20/03/2026 16:00 ICT = UTC+7)
-const PERF_DEFAULT_START_MS = 1773997200000;
 
 let currentPerfStartMs = null; // null → backend uses PERF_DEFAULT_START_MS
+let currentPerfEndMs   = null; // null → no upper bound (preset buttons)
 
 // ── Data loader ────────────────────────────────────────────────────
-async function loadPerformance(startMs = null) {
+async function loadPerformance(startMs = null, endMs = null) {
   // ── Reset display first so stale values never linger ──────────────
   const pnlEl  = document.getElementById("perf-pnl");
   const pctEl  = document.getElementById("perf-pct");
@@ -827,9 +826,10 @@ async function loadPerformance(startMs = null) {
   if (cntEl)   cntEl.textContent = "—";
 
   try {
-    const url = startMs != null
-      ? `/api/performance?startMs=${startMs}`
-      : "/api/performance";
+    const params = [];
+    if (startMs != null) params.push(`startMs=${startMs}`);
+    if (endMs   != null) params.push(`endMs=${endMs}`);
+    const url = "/api/performance" + (params.length ? "?" + params.join("&") : "");
     const res = await api(url);
     if (res.error) return;   // leaves "—" which is intentional
 
@@ -863,14 +863,17 @@ function setPerfPeriod(period) {
 
   if (period === "ALL") {
     currentPerfStartMs = null;
-    loadPerformance(null);
+    currentPerfEndMs   = null;
+    loadPerformance(null, null);
   } else if (period === "YTD") {
     const yr = new Date().getFullYear();
     currentPerfStartMs = new Date(`${yr}-01-01T00:00:00+07:00`).getTime();
-    loadPerformance(currentPerfStartMs);
+    currentPerfEndMs   = null;
+    loadPerformance(currentPerfStartMs, null);
   } else {
     currentPerfStartMs = Date.now() - PERF_PERIODS[period];
-    loadPerformance(currentPerfStartMs);
+    currentPerfEndMs   = null;
+    loadPerformance(currentPerfStartMs, null);
   }
 }
 
@@ -936,11 +939,14 @@ function selectCalDate(year, month, day) {
   document.querySelectorAll(".perf-period-btn").forEach((b) => b.classList.remove("active"));
   document.getElementById("perf-cal-trigger").classList.add("active");
 
-  // Midnight ICT of selected date
-  const iso = `${year}-${mm}-${dd}T00:00:00+07:00`;
-  const ms  = new Date(iso).getTime();
-  currentPerfStartMs = ms;
-  loadPerformance(ms);
+  // Midnight ICT = start of selected day
+  const iso    = `${year}-${mm}-${dd}T00:00:00+07:00`;
+  const startMs = new Date(iso).getTime();
+  // End of selected day (23:59:59.999 ICT)
+  const endMs   = new Date(`${year}-${mm}-${dd}T23:59:59.999+07:00`).getTime();
+  currentPerfStartMs = startMs;
+  currentPerfEndMs   = endMs;
+  loadPerformance(startMs, endMs);
 }
 
 // Close calendar when clicking outside
@@ -984,7 +990,7 @@ async function initDashboard() {
   liveZscorePolling = setInterval(loadLiveZscore, 6000);
 
   if (perfPolling) clearInterval(perfPolling);
-  perfPolling = setInterval(() => loadPerformance(currentPerfStartMs), 60000);
+  perfPolling = setInterval(() => loadPerformance(currentPerfStartMs, currentPerfEndMs), 60000);
 }
 
 document.addEventListener("DOMContentLoaded", () => {

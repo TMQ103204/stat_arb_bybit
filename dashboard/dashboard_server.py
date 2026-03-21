@@ -674,7 +674,7 @@ def get_performance():
     Automatically uses Demo or Mainnet credentials based on execution config mode.
     """
     try:
-        # ── Dynamic startMs from frontend (time-range filter) ──────────
+        # ── Parse startMs ──────────────────────────────────────────────
         start_ms_param = request.args.get("startMs")
         if start_ms_param:
             try:
@@ -683,6 +683,16 @@ def get_performance():
                 start_ms = PERF_START_MS
         else:
             start_ms = PERF_START_MS
+
+        # ── Parse endMs (optional – set by calendar day picker) ────────
+        end_ms_param = request.args.get("endMs")
+        if end_ms_param:
+            try:
+                end_ms = int(end_ms_param)
+            except (ValueError, TypeError):
+                end_ms = None
+        else:
+            end_ms = None
 
         # ── Read execution config ──────────────────────────────────────
         cfg = parse_execution_config()
@@ -708,22 +718,30 @@ def get_performance():
         session = _make_session(mode, api_key, api_secret)
 
         # ── Fetch raw data from bot-launch date ───────────────────────
-        # Always fetch everything from PERF_START_MS regardless of user filter.
-        # User's startMs is applied client-side below using the correct close-time field.
-        all_pnl_rows, pnl_errors = _fetch_all_closed_pnl(session, PERF_START_MS)
+        all_pnl_rows,  pnl_errors  = _fetch_all_closed_pnl(session, PERF_START_MS)
         all_exec_rows, exec_errors = _fetch_all_executions(session, PERF_START_MS)
 
         # ── Apply user time filter ────────────────────────────────────
-        # Closed P&L: filter by updatedTime (= position CLOSE time)
-        # Executions: filter by execTime
-        closed_pnl_rows = [
-            r for r in all_pnl_rows
-            if int(r.get("updatedTime", 0)) >= start_ms
-        ]
-        exec_rows = [
-            r for r in all_exec_rows
-            if int(r.get("execTime", 0)) >= start_ms
-        ]
+        # If endMs is provided (specific day selected): exact window [start, end]
+        # Otherwise (preset button): from startMs to now
+        if end_ms is not None:
+            closed_pnl_rows = [
+                r for r in all_pnl_rows
+                if start_ms <= int(r.get("updatedTime", 0)) <= end_ms
+            ]
+            exec_rows = [
+                r for r in all_exec_rows
+                if start_ms <= int(r.get("execTime", 0)) <= end_ms
+            ]
+        else:
+            closed_pnl_rows = [
+                r for r in all_pnl_rows
+                if int(r.get("updatedTime", 0)) >= start_ms
+            ]
+            exec_rows = [
+                r for r in all_exec_rows
+                if int(r.get("execTime", 0)) >= start_ms
+            ]
 
         # ── Aggregate ────────────────────────────────────────────────
         total_pnl = sum(float(r.get("closedPnl", 0)) for r in closed_pnl_rows)
