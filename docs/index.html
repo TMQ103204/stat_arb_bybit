@@ -62,14 +62,24 @@
           <button class="perf-period-btn" data-period="YTD" onclick="setPerfPeriod('YTD')">YTD</button>
           <button class="perf-period-btn active" data-period="ALL" onclick="setPerfPeriod('ALL')">ALL</button>
           <span class="perf-filter-sep"></span>
-          <div class="perf-date-wrap">
-            <span class="perf-date-icon">📅</span>
-            <input type="text" id="perf-date-picker" class="perf-date-input"
-                   placeholder="DD-MM-YYYY" maxlength="10"
-                   oninput="autoFormatDateInput(this)"
-                   onblur="setPerfCustomDate(this.value)"
-                   onkeydown="if(event.key==='Enter'){setPerfCustomDate(this.value)}"
-                   title="Enter start date (DD-MM-YYYY)" />
+          <!-- Custom calendar date picker -->
+          <div class="perf-cal" id="perf-cal">
+            <button class="perf-period-btn perf-cal-trigger" id="perf-cal-trigger"
+                    onclick="toggleCal(event)" title="Pick a start date">
+              📅 <span id="perf-cal-label">Date</span>
+            </button>
+            <div class="perf-cal-panel" id="perf-cal-panel" aria-hidden="true">
+              <div class="perf-cal-nav">
+                <button class="perf-cal-nav-btn" onclick="dpNav(event,-1)">&#8249;</button>
+                <span class="perf-cal-title" id="perf-cal-title"></span>
+                <button class="perf-cal-nav-btn" onclick="dpNav(event,1)">&#8250;</button>
+              </div>
+              <div class="perf-cal-weekdays">
+                <span>Mo</span><span>Tu</span><span>We</span><span>Th</span>
+                <span>Fr</span><span>Sa</span><span>Su</span>
+              </div>
+              <div class="perf-cal-days" id="perf-cal-days"></div>
+            </div>
           </div>
         </div>
       </div>

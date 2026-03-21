@@ -811,11 +811,12 @@ const PERF_PERIODS = {
   "6M":  180 * 24 * 60 * 60 * 1000,
   "1Y":  365 * 24 * 60 * 60 * 1000,
 };
-// Default start = bot launch date (20/03/2026 16:00 ICT)
+// Default window = bot launch date (20/03/2026 16:00 ICT = UTC+7)
 const PERF_DEFAULT_START_MS = 1773997200000;
 
-let currentPerfStartMs = null; // null → server uses PERF_DEFAULT_START_MS
+let currentPerfStartMs = null; // null → backend uses PERF_DEFAULT_START_MS
 
+// ── Data loader ────────────────────────────────────────────────────
 async function loadPerformance(startMs = null) {
   try {
     const url = startMs != null
@@ -831,22 +832,18 @@ async function loadPerformance(startMs = null) {
     const pnlEl = document.getElementById("perf-pnl");
     const pnl = res.total_pnl;
     pnlEl.textContent = (pnl >= 0 ? "+" : "") + pnl.toFixed(2) + " USDT";
-    pnlEl.className =
-      "perf-value " + (pnl >= 0 ? "perf-positive" : "perf-negative");
+    pnlEl.className = "perf-value " + (pnl >= 0 ? "perf-positive" : "perf-negative");
 
     const pctEl = document.getElementById("perf-pct");
     const pct = res.pnl_pct;
     pctEl.textContent = (pct >= 0 ? "+" : "") + pct.toFixed(3) + "%";
-    pctEl.className =
-      "perf-value " + (pct >= 0 ? "perf-positive" : "perf-negative");
+    pctEl.className = "perf-value " + (pct >= 0 ? "perf-positive" : "perf-negative");
 
     document.getElementById("perf-count").textContent = res.trade_count;
-  } catch (e) {
-    /* offline — leave dashes */
-  }
+  } catch (e) { /* offline */ }
 }
 
-/** Activate a preset period button and reload performance data. */
+// ── Period preset buttons ─────────────────────────────────────────
 function setPerfPeriod(period) {
   document.querySelectorAll(".perf-period-btn").forEach((b) =>
     b.classList.remove("active")
@@ -854,15 +851,14 @@ function setPerfPeriod(period) {
   const btn = document.querySelector(`.perf-period-btn[data-period="${period}"]`);
   if (btn) btn.classList.add("active");
 
-  const dp = document.getElementById("perf-date-picker");
-  if (dp) dp.value = "";
+  // Reset calendar trigger label
+  document.getElementById("perf-cal-label").textContent = "Date";
+  document.getElementById("perf-cal-trigger").classList.remove("active");
 
   if (period === "ALL") {
-    // All data since bot launch date
     currentPerfStartMs = null;
     loadPerformance(null);
   } else if (period === "YTD") {
-    // Start of current year at midnight ICT (UTC+7)
     const yr = new Date().getFullYear();
     currentPerfStartMs = new Date(`${yr}-01-01T00:00:00+07:00`).getTime();
     loadPerformance(currentPerfStartMs);
@@ -872,32 +868,82 @@ function setPerfPeriod(period) {
   }
 }
 
-/** Auto-format text input as DD-MM-YYYY while typing. */
-function autoFormatDateInput(input) {
-  let raw = input.value.replace(/\D/g, "").slice(0, 8);
-  let result = raw;
-  if (raw.length > 2) result = raw.slice(0, 2) + "-" + raw.slice(2);
-  if (raw.length > 4) result = result.slice(0, 5) + "-" + raw.slice(4, 8);
-  input.value = result;
+// ── Custom Calendar Picker ────────────────────────────────────────
+const CAL_MONTHS = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December"
+];
+let dpYear  = new Date().getFullYear();
+let dpMonth = new Date().getMonth();
+let dpSelected = null; // { year, month (0-based), day }
+
+function toggleCal(e) {
+  e.stopPropagation();
+  const panel = document.getElementById("perf-cal-panel");
+  const open  = panel.classList.toggle("open");
+  if (open) renderCalendar();
 }
 
-/** Parse DD-MM-YYYY and trigger filter; treats date as 00:00 ICT (UTC+7). */
-function setPerfCustomDate(dateStr) {
-  if (!dateStr || dateStr.length < 10) return;
-  const parts = dateStr.split("-");
-  if (parts.length !== 3) return;
-  const [dd, mm, yyyy] = parts;
-  if (!dd || !mm || !yyyy || yyyy.length !== 4) return;
-  const ms = new Date(`${yyyy}-${mm}-${dd}T00:00:00+07:00`).getTime();
-  if (isNaN(ms)) return;
+function dpNav(e, dir) {
+  e.stopPropagation();
+  dpMonth += dir;
+  if (dpMonth < 0)  { dpMonth = 11; dpYear--; }
+  if (dpMonth > 11) { dpMonth = 0;  dpYear++; }
+  renderCalendar();
+}
 
-  document.querySelectorAll(".perf-period-btn").forEach((b) =>
-    b.classList.remove("active")
-  );
+function renderCalendar() {
+  document.getElementById("perf-cal-title").textContent =
+    `${CAL_MONTHS[dpMonth]} ${dpYear}`;
 
+  const grid = document.getElementById("perf-cal-days");
+  const today = new Date();
+  const daysInMonth = new Date(dpYear, dpMonth + 1, 0).getDate();
+  // Monday-first offset: getDay() returns 0=Sun,1=Mon...6=Sat
+  let firstDow = new Date(dpYear, dpMonth, 1).getDay();
+  const offset = (firstDow === 0) ? 6 : firstDow - 1; // blanks before day 1
+
+  let html = "";
+  for (let i = 0; i < offset; i++) html += '<span class="perf-cal-blank"></span>';
+  for (let d = 1; d <= daysInMonth; d++) {
+    const isToday = (d === today.getDate() && dpMonth === today.getMonth() && dpYear === today.getFullYear());
+    const isSel   = dpSelected && (d === dpSelected.day && dpMonth === dpSelected.month && dpYear === dpSelected.year);
+    const cls = ["perf-cal-day", isToday ? "today" : "", isSel ? "selected" : ""].filter(Boolean).join(" ");
+    html += `<button class="${cls}" onclick="selectCalDate(${dpYear},${dpMonth+1},${d})">${d}</button>`;
+  }
+  grid.innerHTML = html;
+}
+
+function selectCalDate(year, month, day) {
+  dpSelected = { year, month: month - 1, day };
+  renderCalendar();
+
+  // Update trigger label (DD/MM)
+  const dd = String(day).padStart(2, "0");
+  const mm = String(month).padStart(2, "0");
+  document.getElementById("perf-cal-label").textContent = `${dd}/${mm}/${year}`;
+
+  // Close panel
+  document.getElementById("perf-cal-panel").classList.remove("open");
+
+  // Deactivate preset buttons, activate calendar trigger
+  document.querySelectorAll(".perf-period-btn").forEach((b) => b.classList.remove("active"));
+  document.getElementById("perf-cal-trigger").classList.add("active");
+
+  // Midnight ICT of selected date
+  const iso = `${year}-${mm}-${dd}T00:00:00+07:00`;
+  const ms  = new Date(iso).getTime();
   currentPerfStartMs = ms;
   loadPerformance(ms);
 }
+
+// Close calendar when clicking outside
+document.addEventListener("click", (e) => {
+  const cal = document.getElementById("perf-cal");
+  if (cal && !cal.contains(e.target)) {
+    document.getElementById("perf-cal-panel")?.classList.remove("open");
+  }
+});
 
 // ═══════════════════════════════════════════════════════════════════
 // INIT

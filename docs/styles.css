@@ -348,46 +348,148 @@ body {
   margin: 0 2px;
 }
 
-.perf-date-wrap {
+/* ── Custom Calendar Date Picker ────────────────────────────────── */
+.perf-cal {
+  position: relative;
+}
+
+/* Calendar trigger button — inherits .perf-period-btn styles */
+.perf-cal-trigger {
+  gap: 4px;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+/* Dropdown panel */
+.perf-cal-panel {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  width: 226px;
+  background: rgba(10, 14, 28, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 12px;
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(99, 102, 241, 0.15);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  z-index: 500;
+  animation: calFadeIn 0.15s ease;
+}
+.perf-cal-panel.open {
+  display: block;
+}
+
+@keyframes calFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Navigation header */
+.perf-cal-nav {
   display: flex;
   align-items: center;
-  gap: 4px;
-  background: rgba(3, 7, 18, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  padding: 2px 6px;
-  transition: border-color 0.2s;
-}
-.perf-date-wrap:hover,
-.perf-date-wrap:focus-within {
-  border-color: var(--brand-light);
+  justify-content: space-between;
+  margin-bottom: 10px;
 }
 
-.perf-date-icon {
-  font-size: 10px;
-  line-height: 1;
-  opacity: 0.7;
-  pointer-events: none;
-  user-select: none;
-}
-
-.perf-date-input {
+.perf-cal-nav-btn {
   background: transparent;
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.18s;
+}
+.perf-cal-nav-btn:hover {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: var(--brand-light);
+  color: var(--text-primary);
+}
+
+.perf-cal-title {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+}
+
+/* Weekday row */
+.perf-cal-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  margin-bottom: 4px;
+}
+.perf-cal-weekdays span {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 2px 0;
+  letter-spacing: 0.3px;
+}
+
+/* Day grid */
+.perf-cal-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.perf-cal-blank {
+  /* empty cell */
+}
+
+.perf-cal-day {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
   color: var(--text-secondary);
   font-family: "JetBrains Mono", monospace;
   font-size: 10px;
-  width: 76px;
-  padding: 0;
-  outline: none;
-  cursor: text;
+  font-weight: 500;
+  padding: 4px 2px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.14s;
+  width: 100%;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.perf-date-input::placeholder {
-  color: var(--text-muted);
-  opacity: 0.6;
+.perf-cal-day:hover {
+  background: rgba(99, 102, 241, 0.22);
+  border-color: var(--brand-light);
+  color: #fff;
 }
-.perf-date-input:focus {
-  color: var(--text-primary);
+.perf-cal-day.today {
+  border-color: var(--brand-light);
+  color: var(--brand-light);
+  font-weight: 700;
+}
+.perf-cal-day.selected {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+  box-shadow: 0 0 10px var(--brand-glow);
+  font-weight: 700;
+}
+.perf-cal-day.today.selected {
+  box-shadow: 0 0 14px var(--brand-glow);
 }
 
 /* ── Layout ────────────────────────────────────────────────────────── */
