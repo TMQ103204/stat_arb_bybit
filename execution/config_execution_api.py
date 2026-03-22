@@ -7,13 +7,16 @@
 from pybit.unified_trading import HTTP
 from dotenv import load_dotenv
 import os
+import logging
+
+_cfg_logger = logging.getLogger("config")
 
 # Load .env from project root
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 # CONFIG VARIABLES
 # mode options: "test" (testnet), "demo" (mainnet demo - real prices, virtual money), "live" (real money)
-mode = "demo"
+mode = "live"
 ticker_1 = "BTRUSDT"
 ticker_2 = "LIGHTUSDT"
 signal_positive_ticker = ticker_2
@@ -73,3 +76,18 @@ elif mode == "demo":
 else:
     session_public = HTTP()
     session_private = HTTP(api_key=api_key, api_secret=api_secret)
+
+# ── Startup mode banner ──────────────────────────────────────────────────────
+if mode == "live":
+    _cfg_logger.warning(
+        "\n"
+        "╔══════════════════════════════════════════════════╗\n"
+        "║  ⚠️  LIVE MODE — REAL MONEY TRADING ACTIVE  ⚠️   ║\n"
+        "║  All orders will execute on Bybit MAINNET.       ║\n"
+        "╚══════════════════════════════════════════════════╝"
+    )
+elif mode == "demo":
+    _cfg_logger.info("[DEMO MODE] Using virtual money on Bybit demo environment.")
+elif mode == "test":
+    _cfg_logger.info("[TEST MODE] Using Bybit testnet.")
+# ─────────────────────────────────────────────────────────────────────────────
