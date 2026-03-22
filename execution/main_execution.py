@@ -21,6 +21,7 @@ from func_execution_calls import set_leverage
 from func_close_positions import close_all_positions
 from func_get_zscore import get_latest_zscore
 from func_save_status import save_status
+from func_calcultions import calculate_exact_live_profit
 from logger_setup import get_logger
 from typing import cast
 import time
@@ -55,7 +56,8 @@ if __name__ == "__main__":
     signal_sign_positive = False
     signal_side = ""
     kill_switch = 0
-    position_open_time = 0.0    # Save status
+    position_open_time = 0.0
+    peak_profit_pct = 0.0   # highest net profit % seen while in HOLDING; used by trailing TP
     save_status(status_dict)
 
     # Set leverage in case forgotten to do so on the platform
@@ -138,8 +140,7 @@ if __name__ == "__main__":
                 status_dict["message"] = f"Re-attached to full hedge position (side={signal_side})"
                 save_status(status_dict)
 
-            # Managing open kill switch if positions change or should reach 2
-            # Check for signal to be false
+            # Manage open position: trailing take-profit + stop-losses
             if kill_switch == 1:
 
                 # Get and save the latest z-score
@@ -150,37 +151,77 @@ if __name__ == "__main__":
                 else:
                     continue
 
-                from config_execution_api import zscore_stop_loss, time_stop_loss_hours
-
-                # Log live position status
-                hold_minutes = (time.time() - position_open_time) / 60 if position_open_time > 0 else 0
-                hold_hours = hold_minutes / 60
-                logger.info(
-                    "HOLDING | Z-Score: %.4f | Side: %s | Hold: %.0fm (%.1fh/%.0fh) | SL: %.1f",
-                    zscore, signal_side, hold_minutes, hold_hours, float(time_stop_loss_hours), float(zscore_stop_loss)
+                from config_execution_api import (
+                    zscore_stop_loss, time_stop_loss_hours,
+                    min_profit_pct, trailing_callback_pct
                 )
 
-                # 1. Close positions (Stop-Loss: Z-score divergence)
-                if abs(zscore) > float(zscore_stop_loss):
-                    logger.critical("Z-SCORE STOP LOSS REACHED: %.4f exceeds threshold %.4f", zscore, float(zscore_stop_loss))
+                # Determine long/short tickers from the logged signal side
+                long_ticker  = signal_positive_ticker if signal_side == "positive" else signal_negative_ticker
+                short_ticker = signal_negative_ticker if signal_side == "positive" else signal_positive_ticker
+
+                # Live net PnL — accounts for exact entry/exit fees per coin (0.055% or 0.11%)
+                live_net_pnl_usdt, live_net_profit_pct = calculate_exact_live_profit(long_ticker, short_ticker)
+
+                hold_minutes = (time.time() - position_open_time) / 60 if position_open_time > 0 else 0
+
+                logger.info(
+                    "HOLDING | Z: %.4f | Side: %s | Hold: %.0fm | Net PnL: %.3f USDT (%.3f%%)",
+                    zscore, signal_side, hold_minutes, live_net_pnl_usdt, live_net_profit_pct
+                )
+
+                # ── Trailing Take-Profit ──────────────────────────────────────────────
+                # Activates only after net profit has cleared the minimum threshold.
+                # Once active, the bot rides the profit upward and closes when it
+                # pulls back trailing_callback_pct from its all-time peak.
+
+                # Update peak as long as profit is climbing
+                if live_net_profit_pct > peak_profit_pct:
+                    peak_profit_pct = live_net_profit_pct
+
+                if peak_profit_pct >= float(min_profit_pct):
+                    # Profit has reached the activation threshold — trailing mode
+                    trailing_trigger_pct = peak_profit_pct - float(trailing_callback_pct)
+
+                    if live_net_profit_pct <= trailing_trigger_pct:
+                        logger.info(
+                            "TRAILING TAKE-PROFIT: profit pulled back to %.3f%% from peak %.3f%% "
+                            "(trigger %.3f%%). Closing position.",
+                            live_net_profit_pct, peak_profit_pct, trailing_trigger_pct
+                        )
+                        kill_switch = 2
+                    else:
+                        logger.info(
+                            "TRAILING ACTIVE: peak=%.3f%% | trigger=%.3f%% | current=%.3f%%",
+                            peak_profit_pct, trailing_trigger_pct, live_net_profit_pct
+                        )
+
+                # ── Stop-loss rules (run regardless of trailing state) ────────────────
+
+                # 1. Emergency stop-loss: Z-score structural breakdown
+                elif abs(zscore) > float(zscore_stop_loss):
+                    logger.critical(
+                        "Z-SCORE STOP LOSS REACHED: %.4f exceeds threshold %.4f",
+                        zscore, float(zscore_stop_loss)
+                    )
                     kill_switch = 2
 
-                # 2. Close positions (Stop-Loss: Time-based)
+                # 2. Time stop-loss: position held too long
                 elif position_open_time > 0 and (time.time() - position_open_time) > float(time_stop_loss_hours) * 3600:
-                    logger.critical("TIME STOP LOSS REACHED: Position open for > %s hours.", time_stop_loss_hours)
+                    logger.critical("TIME STOP LOSS REACHED: position open for > %s hours.", time_stop_loss_hours)
                     kill_switch = 2
 
-                # 3. Close positions (Take Profit: Mean Reversion)
+                # 3. Mean-reversion take-profit (only active before trailing kicks in)
                 elif signal_side == "positive" and zscore < 0:
-                    logger.info("TAKE PROFIT: Z-Score crossed below 0 (was positive side)")
+                    logger.info("TAKE PROFIT: Z-score crossed below 0 (was positive side)")
                     kill_switch = 2
                 elif signal_side == "negative" and zscore >= 0:
-                    logger.info("TAKE PROFIT: Z-Score crossed above 0 (was negative side)")
+                    logger.info("TAKE PROFIT: Z-score crossed above 0 (was negative side)")
                     kill_switch = 2
 
-                # NOTE: Do NOT reset kill_switch to 0 based on is_manage_new_trades here.
+                # NOTE: Do not reset kill_switch to 0 based on is_manage_new_trades here.
                 # The position API can be flaky and temporarily report no positions,
-                # causing kill_switch to flip 0→1 in a loop with stale z-scores.
+                # causing kill_switch to flip 0->1 in a loop with stale z-scores.
 
             # Close all active orders and positions
             if kill_switch == 2:
@@ -188,6 +229,7 @@ if __name__ == "__main__":
                 status_dict["message"] = "Closing existing trades..."
                 save_status(status_dict)
                 kill_switch = close_all_positions(kill_switch)
+                peak_profit_pct = 0.0  # reset trailing peak for the next trade cycle
 
                 # Sleep for 5 seconds
                 time.sleep(5)

@@ -110,3 +110,73 @@ def get_trade_details(orderbook, direction="Long", capital=0):
 
     # Output results
     return (mid_price, stop_loss, quantity)
+
+
+def calculate_exact_live_profit(long_ticker, short_ticker):
+    """
+    Calculate the current net PnL of an open pair trade using live Bybit data.
+
+    Queries the orderbook for realistic exit prices (best bid for long,
+    best ask for short), reads actual position entry prices and sizes,
+    and fetches each symbol's real-time taker fee rate from the API.
+    This correctly handles cases where the two coins have different fee tiers
+    (e.g. 0.055% vs 0.11%).
+
+    Returns:
+        (total_net_pnl_usdt, net_profit_pct) — both 0.0 on any error.
+    """
+    from config_execution_api import session_private as _priv
+    try:
+        # -- 1. Live exit prices from the orderbook ---------------------------
+        ob_long  = session_public.get_orderbook(category="linear", symbol=long_ticker,  limit=1)
+        ob_short = session_public.get_orderbook(category="linear", symbol=short_ticker, limit=1)
+
+        # Long exits at the best bid; short exits at the best ask
+        best_bid_long  = float(ob_long["result"]["b"][0][0])
+        best_ask_short = float(ob_short["result"]["a"][0][0])
+
+        # -- 2. Current position data -----------------------------------------
+        pos_long_res  = _priv.get_positions(category="linear", symbol=long_ticker)
+        pos_short_res = _priv.get_positions(category="linear", symbol=short_ticker)
+
+        pos_long  = get_result_list(pos_long_res)[0]
+        pos_short = get_result_list(pos_short_res)[0]
+
+        size_long       = float(pos_long["size"])
+        avg_price_long  = float(pos_long["avgPrice"])
+        entry_pnl_long  = float(pos_long["cumRealisedPnl"])   # negative = fees paid on entry
+
+        size_short      = float(pos_short["size"])
+        avg_price_short = float(pos_short["avgPrice"])
+        entry_pnl_short = float(pos_short["cumRealisedPnl"])  # negative = fees paid on entry
+
+        if size_long == 0 or size_short == 0:
+            return 0.0, 0.0
+
+        # -- 3. Real-time taker fee rates (handles 0.055% vs 0.11% per coin) --
+        fee_resp_long  = _priv.get_fee_rate(category="linear", symbol=long_ticker)
+        fee_resp_short = _priv.get_fee_rate(category="linear", symbol=short_ticker)
+        taker_rate_long  = float(fee_resp_long["result"]["list"][0]["takerFeeRate"])
+        taker_rate_short = float(fee_resp_short["result"]["list"][0]["takerFeeRate"])
+
+        # -- 4. Gross PnL per leg ---------------------------------------------
+        gross_pnl_long  = (best_bid_long  - avg_price_long)  * size_long
+        gross_pnl_short = (avg_price_short - best_ask_short) * size_short
+
+        # -- 5. Exit fee (market close) per leg --------------------------------
+        exit_fee_long  = best_bid_long  * size_long  * taker_rate_long
+        exit_fee_short = best_ask_short * size_short * taker_rate_short
+
+        # -- 6. Net PnL = Gross + entry realised PnL (already signed) - exit fee
+        net_pnl_long  = gross_pnl_long  + entry_pnl_long  - exit_fee_long
+        net_pnl_short = gross_pnl_short + entry_pnl_short - exit_fee_short
+
+        total_net_pnl_usdt = net_pnl_long + net_pnl_short
+        total_capital      = (avg_price_long * size_long) + (avg_price_short * size_short)
+        net_profit_pct     = (total_net_pnl_usdt / total_capital) * 100 if total_capital > 0 else 0.0
+
+        return total_net_pnl_usdt, net_profit_pct
+
+    except Exception as e:
+        logger.warning("calculate_exact_live_profit failed (%s %s): %s", long_ticker, short_ticker, e)
+        return 0.0, 0.0

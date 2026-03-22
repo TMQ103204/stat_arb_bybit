@@ -14,14 +14,14 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 # CONFIG VARIABLES
 # mode options: "test" (testnet), "demo" (mainnet demo - real prices, virtual money), "live" (real money)
 mode = "demo"
-ticker_1 = "CYSUSDT"
-ticker_2 = "KASUSDT"
+ticker_1 = "BTRUSDT"
+ticker_2 = "LIGHTUSDT"
 signal_positive_ticker = ticker_2
 signal_negative_ticker = ticker_1
 
 limit_order_basis = True # will ensure positions (except for Close) will be placed on limit basis
 
-tradeable_capital_usdt = 1000 # total tradeable capital to be split between both pairs
+tradeable_capital_usdt = 200 # total tradeable capital to be split between both pairs
 stop_loss_fail_safe = 0.15 # stop loss at market order in case of drastic event
 signal_trigger_thresh = 1.1 # z-score threshold which determines trade (must be above zero)
 zscore_stop_loss = 3      # emergency stop-loss: absolute z-score beyond which all positions are closed at market
@@ -31,9 +31,14 @@ time_stop_loss_hours = 48 # maximum time in hours to hold a position before emer
 # If |z_score| >= market_order_zscore_thresh AND expected net profit >= min_profit_pct
 # the bot will use Market orders instead of aggressive Limit orders.
 # Set market_order_zscore_thresh very high (e.g. 99) to disable market order entirely.
-market_order_zscore_thresh = 2.0   # |z| threshold to consider market order (above signal_trigger_thresh)
-min_profit_pct            = 0.5    # minimum expected net profit % of capital (after fees) to allow market order
-taker_fee_pct             = 0.055  # Bybit taker fee per side (%)
+market_order_zscore_thresh = 2   # |z| threshold to consider market order (above signal_trigger_thresh)
+min_profit_pct = 0.5    # min net profit % to: (a) allow market order entry, (b) activate trailing take-profit
+taker_fee_pct = 0.055  # Bybit taker fee per side (%) — used for entry sizing estimates
+
+# ── Trailing Take Profit ────────────────────────────────────────────────────
+# Once net profit >= min_profit_pct, the bot switches from Z-score crossing to
+# a trailing stop: if profit pulls back trailing_callback_pct from its peak, close.
+trailing_callback_pct = 0.15  # max drawdown from peak profit (%) before closing
 
 timeframe = 60 # make sure matches your strategy
 kline_limit = 200 # make sure matches your strategy
