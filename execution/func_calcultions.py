@@ -154,10 +154,24 @@ def calculate_exact_live_profit(long_ticker, short_ticker):
             return 0.0, 0.0
 
         # -- 3. Real-time taker fee rates (handles 0.055% vs 0.11% per coin) --
-        fee_resp_long  = _priv.get_fee_rate(category="linear", symbol=long_ticker)
-        fee_resp_short = _priv.get_fee_rate(category="linear", symbol=short_ticker)
-        taker_rate_long  = float(fee_resp_long["result"]["list"][0]["takerFeeRate"])
-        taker_rate_short = float(fee_resp_short["result"]["list"][0]["takerFeeRate"])
+        # Falls back to the configured taker_fee_pct if the pybit version in use
+        # does not expose get_fee_rate (older builds of the unified_trading HTTP client).
+        from config_execution_api import taker_fee_pct as _fallback_fee_pct
+        _fallback_rate = _fallback_fee_pct / 100.0
+        try:
+            fee_resp_long  = _priv.get_fee_rate(category="linear", symbol=long_ticker)
+            fee_resp_short = _priv.get_fee_rate(category="linear", symbol=short_ticker)
+            taker_rate_long  = float(fee_resp_long["result"]["list"][0]["takerFeeRate"])
+            taker_rate_short = float(fee_resp_short["result"]["list"][0]["takerFeeRate"])
+        except AttributeError:
+            # get_fee_rate not available in this pybit version — use config value
+            logger.debug("get_fee_rate unavailable; using configured taker_fee_pct=%.4f%%", _fallback_fee_pct)
+            taker_rate_long  = _fallback_rate
+            taker_rate_short = _fallback_rate
+        except Exception as fee_err:
+            logger.warning("Could not fetch live fee rate (%s): falling back to %.4f%%", fee_err, _fallback_fee_pct)
+            taker_rate_long  = _fallback_rate
+            taker_rate_short = _fallback_rate
 
         # -- 4. Gross PnL per leg ---------------------------------------------
         gross_pnl_long  = (best_bid_long  - avg_price_long)  * size_long
