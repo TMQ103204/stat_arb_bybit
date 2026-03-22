@@ -1,4 +1,4 @@
-from config_execution_api import session_private
+from config_execution_api import session_private, retry_api_call
 from logger_setup import get_logger
 from bybit_response import get_result_list, get_ret_code
 import time
@@ -9,7 +9,7 @@ logger = get_logger("position")
 def open_position_confirmation(ticker, max_retries=3):
     for attempt in range(max_retries):
         try:
-            position = session_private.get_positions(category="linear", symbol=ticker)
+            position = retry_api_call(session_private.get_positions, category="linear", symbol=ticker)
             if get_ret_code(position) == 0:
                 for item in get_result_list(position):
                     if float(item["size"]) > 0:
@@ -29,7 +29,8 @@ def open_position_confirmation(ticker, max_retries=3):
 def active_position_confirmation(ticker, max_retries=3):
     for attempt in range(max_retries):
         try:
-            active_order = session_private.get_open_orders(
+            active_order = retry_api_call(
+                session_private.get_open_orders,
                 category="linear",
                 symbol=ticker
             )
@@ -51,7 +52,11 @@ def active_position_confirmation(ticker, max_retries=3):
 def get_open_positions(ticker, direction="Long"):
 
     # Get position
-    position = session_private.get_positions(category="linear", symbol=ticker)
+    try:
+        position = retry_api_call(session_private.get_positions, category="linear", symbol=ticker)
+    except Exception as e:
+        logger.error("Failed to get_open_positions for %s: %s", ticker, e)
+        return (0, 0)
 
     # Determine target side
     target_side = "Buy" if direction == "Long" else "Sell"
@@ -70,10 +75,15 @@ def get_open_positions(ticker, direction="Long"):
 def get_active_positions(ticker):
 
     # Get open orders
-    active_order = session_private.get_open_orders(
-        category="linear",
-        symbol=ticker
-    )
+    try:
+        active_order = retry_api_call(
+            session_private.get_open_orders,
+            category="linear",
+            symbol=ticker
+        )
+    except Exception as e:
+        logger.error("Failed to get_active_positions for %s: %s", ticker, e)
+        return (0, 0)
 
     # Construct a response
     order_list = get_result_list(active_order)
@@ -90,7 +100,8 @@ def query_existing_order(ticker, order_id, direction):
 
     # First check open orders (unfilled/partially filled)
     try:
-        order = session_private.get_open_orders(
+        order = retry_api_call(
+            session_private.get_open_orders,
             category="linear",
             symbol=ticker,
             orderId=order_id
@@ -104,7 +115,8 @@ def query_existing_order(ticker, order_id, direction):
 
     # Then check order history (filled/cancelled/rejected)
     try:
-        order = session_private.get_order_history(
+        order = retry_api_call(
+            session_private.get_order_history,
             category="linear",
             symbol=ticker,
             orderId=order_id

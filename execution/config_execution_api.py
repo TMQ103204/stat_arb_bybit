@@ -24,7 +24,7 @@ signal_negative_ticker = ticker_1
 
 limit_order_basis = True # will ensure positions (except for Close) will be placed on limit basis
 
-tradeable_capital_usdt = 200 # total tradeable capital to be split between both pairs
+tradeable_capital_usdt = 5 # total tradeable capital to be split between both pairs
 stop_loss_fail_safe = 0.15 # stop loss at market order in case of drastic event
 signal_trigger_thresh = 1.1 # z-score threshold which determines trade (must be above zero)
 zscore_stop_loss = 3      # emergency stop-loss: absolute z-score beyond which all positions are closed at market
@@ -90,4 +90,46 @@ elif mode == "demo":
     _cfg_logger.info("[DEMO MODE] Using virtual money on Bybit demo environment.")
 elif mode == "test":
     _cfg_logger.info("[TEST MODE] Using Bybit testnet.")
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── API Retry Wrapper ────────────────────────────────────────────────────────
+import time
+
+def retry_api_call(func, *args, max_retries=3, backoff_factor=1.5, **kwargs):
+    """
+    Executes a Bybit API call with automatic retries on network/connection errors.
+    Useful for handling transient drops like ConnectionResetError (10054).
+    """
+    import urllib3.exceptions
+    import requests.exceptions
+    
+    retry_exceptions = (
+        ConnectionError,
+        TimeoutError,
+        urllib3.exceptions.ProtocolError,
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+    )
+    
+    last_exception = None
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except retry_exceptions as e:
+            last_exception = e
+            _cfg_logger.warning("API connection dropped (%s) — attempt %d/%d retrying in %.1fs", 
+                              type(e).__name__, attempt + 1, max_retries, backoff_factor ** attempt)
+            time.sleep(backoff_factor ** attempt)
+        except Exception as e:
+            # If it's a generic Exception but string contains connection clues, retry it too
+            if "Connection aborted" in str(e) or "10054" in str(e) or "ConnectionResetError" in str(e):
+                last_exception = e
+                _cfg_logger.warning("API connection reset (%s) — attempt %d/%d retrying in %.1fs", 
+                                  str(e)[:40], attempt + 1, max_retries, backoff_factor ** attempt)
+                time.sleep(backoff_factor ** attempt)
+            else:
+                raise  # Unhandled exception (e.g. Invalid API Key), fail immediately
+    
+    _cfg_logger.error("API call failed permanently after %d retries: %s", max_retries, last_exception)
+    raise last_exception
 # ─────────────────────────────────────────────────────────────────────────────

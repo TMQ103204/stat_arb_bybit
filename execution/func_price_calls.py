@@ -1,6 +1,6 @@
 from config_execution_api import ticker_1
 from config_execution_api import ticker_2
-from config_execution_api import session_public
+from config_execution_api import session_public, retry_api_call
 from config_execution_api import timeframe
 from config_execution_api import kline_limit
 from func_calcultions import extract_close_prices
@@ -17,7 +17,8 @@ def get_ticker_trade_liquidity(ticker):
 
     # Get trades history
     try:
-        trades = session_public.get_public_trade_history(
+        trades = retry_api_call(
+            session_public.get_public_trade_history,
             category="linear",
             symbol=ticker,
             limit=50
@@ -67,7 +68,8 @@ def get_price_klines(ticker):
     # Get prices (V5 uses start in milliseconds)
     time_start_seconds, _, _ = get_timestamps()
     try:
-        prices = session_public.get_mark_price_kline(
+        prices = retry_api_call(
+            session_public.get_mark_price_kline,
             category="linear",
             symbol=ticker,
             interval=str(timeframe),

@@ -1,4 +1,4 @@
-from config_execution_api import session_public, ticker_1, ticker_2
+from config_execution_api import session_public, ticker_1, ticker_2, retry_api_call
 from func_calcultions import get_trade_details
 from func_price_calls import get_latest_klines
 from func_stats import calculate_metrics
@@ -26,7 +26,7 @@ def get_latest_zscore():
 
     # Get latest asset orderbook prices and add dummy price for latest
     try:
-        orderbook_1 = session_public.get_orderbook(category="linear", symbol=ticker_1)
+        orderbook_1 = retry_api_call(session_public.get_orderbook, category="linear", symbol=ticker_1)
     except Exception as e:
         logger.error("Failed to get orderbook for %s: %s", ticker_1, e)
         return None
@@ -38,7 +38,7 @@ def get_latest_zscore():
     mid_price_1, _, _, = get_trade_details(get_result_dict(orderbook_1))
     time.sleep(0.5) # Using to prevent overwhelming REST API with requests and getting blocked
     try:
-        orderbook_2 = session_public.get_orderbook(category="linear", symbol=ticker_2)
+        orderbook_2 = retry_api_call(session_public.get_orderbook, category="linear", symbol=ticker_2)
     except Exception as e:
         logger.error("Failed to get orderbook for %s: %s", ticker_2, e)
         return None
