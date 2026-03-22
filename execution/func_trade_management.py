@@ -239,7 +239,17 @@ def manage_new_trades(kill_switch):
                                     "%d retries. Closing all positions to avoid unhedged exposure.",
                                     max_retries
                                 )
+                                # BUG FIX #1+#2: Sleep 3s so Bybit API has time to register
+                                # the freshly-filled position before we query its size.
+                                # Without this, get_positions() returns size=0 and the
+                                # close order is silently skipped, leaving a naked leg open.
+                                time.sleep(3)
                                 close_all_positions(kill_switch)
+                                # BUG FIX #1: Return kill_switch=0 so main loop goes back to
+                                # SEEKING TRADES, NOT to HOLDING. The original code fell through
+                                # to kill_switch=1 which falsely signalled a full hedge.
+                                kill_switch = 0
+                                return kill_switch, signal_side
                             else:
                                 logger.warning(
                                     "Max retries reached for long order and no position opened. "
@@ -248,7 +258,6 @@ def manage_new_trades(kill_switch):
                                 kill_switch = 0
                                 continue
                             # ──────────────────────────────────────────────────────────────────
-                            kill_switch = 1
                         else:
                             counts_long = 0
                             is_retry_long = True
@@ -285,7 +294,17 @@ def manage_new_trades(kill_switch):
                                     "%d retries. Closing all positions to avoid unhedged exposure.",
                                     max_retries
                                 )
+                                # BUG FIX #1+#2: Sleep 3s so Bybit API has time to register
+                                # the freshly-filled position before we query its size.
+                                # Without this, get_positions() returns size=0 and the
+                                # close order is silently skipped, leaving a naked leg open.
+                                time.sleep(3)
                                 close_all_positions(kill_switch)
+                                # BUG FIX #1: Return kill_switch=0 so main loop goes back to
+                                # SEEKING TRADES, NOT to HOLDING. The original code fell through
+                                # to kill_switch=1 which falsely signalled a full hedge.
+                                kill_switch = 0
+                                return kill_switch, signal_side
                             else:
                                 logger.warning(
                                     "Max retries reached for short order and no position opened. "
@@ -294,7 +313,6 @@ def manage_new_trades(kill_switch):
                                 kill_switch = 0
                                 continue
                             # ──────────────────────────────────────────────────────────────────
-                            kill_switch = 1
                         else:
                             counts_short = 0
                             is_retry_short = True

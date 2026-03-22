@@ -76,13 +76,42 @@ if __name__ == "__main__":
             is_n_ticker_open = open_position_confirmation(signal_negative_ticker)
             is_p_ticker_active = active_position_confirmation(signal_positive_ticker)
             is_n_ticker_active = active_position_confirmation(signal_negative_ticker)
+
+            # BUG FIX #3: Instead of any(), classify the state of the two legs precisely.
+            # any() would re-attach to HOLDING even when only ONE leg is open — exactly
+            # the half-position scenario that caused the 54-minute naked POPCAT trade.
+            #
+            # has_p: positive ticker has a position OR an active order
+            # has_n: negative ticker has a position OR an active order
+            has_p = is_p_ticker_open or is_p_ticker_active
+            has_n = is_n_ticker_open or is_n_ticker_active
+            both_legs_open   = has_p and has_n   # full hedge — safe to re-attach
+            half_leg_open    = has_p ^ has_n      # exactly one leg — emergency close!
+            no_positions     = not has_p and not has_n  # clean slate — seek new trades
+            is_manage_new_trades = no_positions
+
             checks_all = [is_p_ticker_open, is_n_ticker_open, is_p_ticker_active, is_n_ticker_active]
-            is_manage_new_trades = not any(checks_all)
 
             # Save status
             status_dict["message"] = "Initial checks made..."
             status_dict["checks"] = str(checks_all)
             save_status(status_dict)
+
+            # ── HALF-POSITION DETECTED on startup / restart ──────────────────────────
+            # This catches naked legs that survived a crash / manual restart.
+            # Close the orphan leg immediately and reset to SEEKING.
+            if half_leg_open and kill_switch == 0:
+                orphan_ticker = signal_positive_ticker if has_p else signal_negative_ticker
+                logger.critical(
+                    "STARTUP HALF-POSITION DETECTED: Only %s has an open leg. "
+                    "Closing orphan position to avoid unhedged exposure.",
+                    orphan_ticker
+                )
+                time.sleep(3)  # let Bybit API settle before querying size
+                close_all_positions(kill_switch)
+                kill_switch = 0
+                status_dict["message"] = "Orphan half-position closed. Seeking new trades."
+                save_status(status_dict)
 
             # Check for signal and place new trades
             if is_manage_new_trades and kill_switch == 0:
@@ -92,8 +121,8 @@ if __name__ == "__main__":
                 if kill_switch == 1:
                     position_open_time = time.time()
 
-            # If trades are already open but kill_switch is 0 (e.g., bot restarted), set to 1
-            if not is_manage_new_trades and kill_switch == 0:
+            # If BOTH legs are open but kill_switch is 0 (e.g., bot restarted), re-attach to HOLDING
+            if both_legs_open and kill_switch == 0:
                 kill_switch = 1
                 position_open_time = time.time()
                 # Determine signal_side from current z-score for re-attach
@@ -102,11 +131,11 @@ if __name__ == "__main__":
                     if reattach_result is not None:
                         reattach_zscore = float(cast(float, reattach_result[0]))
                         signal_side = "positive" if reattach_zscore > 0 else "negative"
-                        logger.info("Re-attached: signal_side=%s (z-score=%.4f)", signal_side, reattach_zscore)
+                        logger.info("Re-attached (both legs): signal_side=%s (z-score=%.4f)", signal_side, reattach_zscore)
                     else:
                         signal_side = "positive"  # fallback
                         logger.warning("Re-attached with fallback signal_side=positive")
-                status_dict["message"] = f"Re-attached to open positions (side={signal_side})"
+                status_dict["message"] = f"Re-attached to full hedge position (side={signal_side})"
                 save_status(status_dict)
 
             # Managing open kill switch if positions change or should reach 2
