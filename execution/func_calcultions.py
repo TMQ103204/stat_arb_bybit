@@ -3,11 +3,50 @@ from config_execution_api import session_public
 from logger_setup import get_logger
 from bybit_response import get_result_list
 import math
+import time
 
 logger = get_logger("calculations")
 
 # Cache for instrument info to avoid repeated API calls
 _instrument_cache = {}
+
+# ── Fee rate cache ────────────────────────────────────────────────────────────
+# get_fee_rates requires a real (mainnet) authenticated session.
+# Demo accounts get ErrCode 10001 on this endpoint, so we always use mainnet
+# credentials. Rates are cached for 1 hour to avoid hammering the API.
+_fee_rate_cache: dict = {}          # {symbol: (rate_float, fetched_at_ts)}
+_FEE_CACHE_TTL = 3600               # seconds before re-fetching
+_fee_session = None                 # lazy-initialised mainnet session
+
+def _get_fee_session():
+    """Return a mainnet HTTP session for fee-rate queries (created once)."""
+    global _fee_session
+    if _fee_session is None:
+        from config_execution_api import api_key_mainnet, api_secret_mainnet
+        from pybit.unified_trading import HTTP
+        _fee_session = HTTP(api_key=api_key_mainnet, api_secret=api_secret_mainnet)
+        logger.debug("Fee-rate session initialised (mainnet).")
+    return _fee_session
+
+
+def _get_taker_fee_rate(symbol: str, fallback_rate: float) -> float:
+    """Return taker fee rate for symbol, using cache then live API then fallback."""
+    global _fee_rate_cache
+    now = time.time()
+    cached = _fee_rate_cache.get(symbol)
+    if cached and (now - cached[1]) < _FEE_CACHE_TTL:
+        return cached[0]
+    try:
+        sess = _get_fee_session()
+        resp = sess.get_fee_rates(category="linear", symbol=symbol)
+        rate = float(resp["result"]["list"][0]["takerFeeRate"])
+        _fee_rate_cache[symbol] = (rate, now)
+        logger.debug("Fee rate for %s: %.6f (%.4f%%)", symbol, rate, rate * 100)
+        return rate
+    except Exception as e:
+        logger.warning("Could not fetch fee rate for %s (%s): using fallback %.4f%%", symbol, e, fallback_rate * 100)
+        return fallback_rate
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _get_instrument_info(symbol):
     """Fetch and cache instrument info (tick size + qty step) from API."""
@@ -154,19 +193,12 @@ def calculate_exact_live_profit(long_ticker, short_ticker):
             return 0.0, 0.0
 
         # -- 3. Real-time taker fee rates (handles 0.055% vs 0.11% per coin) --
-        # get_fee_rates is the correct pybit unified_trading method.
-        # Falls back to taker_fee_pct from config only on genuine API/network errors.
+        # Uses a dedicated mainnet session (demo blocks this endpoint).
+        # Rates are cached for 1 hour so we don't call the API every tick.
         from config_execution_api import taker_fee_pct as _fallback_fee_pct
         _fallback_rate = _fallback_fee_pct / 100.0
-        try:
-            fee_resp_long  = _priv.get_fee_rates(category="linear", symbol=long_ticker)
-            fee_resp_short = _priv.get_fee_rates(category="linear", symbol=short_ticker)
-            taker_rate_long  = float(fee_resp_long["result"]["list"][0]["takerFeeRate"])
-            taker_rate_short = float(fee_resp_short["result"]["list"][0]["takerFeeRate"])
-        except Exception as fee_err:
-            logger.warning("Could not fetch live fee rates (%s): using config fallback %.4f%%", fee_err, _fallback_fee_pct)
-            taker_rate_long  = _fallback_rate
-            taker_rate_short = _fallback_rate
+        taker_rate_long  = _get_taker_fee_rate(long_ticker,  _fallback_rate)
+        taker_rate_short = _get_taker_fee_rate(short_ticker, _fallback_rate)
 
         # -- 4. Gross PnL per leg ---------------------------------------------
         gross_pnl_long  = (best_bid_long  - avg_price_long)  * size_long
