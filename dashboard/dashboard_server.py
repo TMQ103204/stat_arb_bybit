@@ -364,7 +364,7 @@ def reset_execution():
             text=True, cwd=str(EXECUTION_DIR), env=env,
             timeout=60,
         )
-        lines = result.stdout.splitlines()
+        lines = (result.stdout or "").splitlines()
         with execution_lock:
             for line in lines:
                 execution_output.append(line)

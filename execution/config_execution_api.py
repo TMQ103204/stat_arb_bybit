@@ -35,7 +35,7 @@ time_stop_loss_hours = 48 # maximum time in hours to hold a position before emer
 # the bot will use Market orders instead of aggressive Limit orders.
 # Set market_order_zscore_thresh very high (e.g. 99) to disable market order entirely.
 market_order_zscore_thresh = 2   # |z| threshold to consider market order (above signal_trigger_thresh)
-min_profit_pct = 0.5    # min net profit % to: (a) allow market order entry, (b) activate trailing take-profit
+min_profit_pct = 1.2    # min net profit % to: (a) allow market order entry, (b) activate trailing take-profit
 taker_fee_pct = 0.055  # Bybit taker fee per side (%) — used for entry sizing estimates
 
 # ── Trailing Take Profit ────────────────────────────────────────────────────
