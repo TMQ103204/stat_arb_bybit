@@ -231,8 +231,8 @@ if __name__ == "__main__":
                 kill_switch = close_all_positions(kill_switch)
                 peak_profit_pct = 0.0  # reset trailing peak for the next trade cycle
 
-                # Sleep for 5 seconds
-                time.sleep(5)
+                # Sleep after closing — let market settle before seeking new signal
+                time.sleep(60)
 
         except Exception as e:
             logger.exception("Unexpected error in main loop: %s", e)
