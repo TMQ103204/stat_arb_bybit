@@ -33,6 +33,16 @@
         <span class="tag">Bybit</span>
       </div>
 
+      <!-- ── Global Mode (new) ── -->
+      <div class="header-mode">
+        <input type="hidden" id="global-mode" value="demo" />
+        <div class="mode-switcher" id="global-mode-switcher">
+          <button class="mode-btn mode-test" data-mode="test" onclick="setGlobalModeUI('test')">TEST</button>
+          <button class="mode-btn mode-demo" data-mode="demo" onclick="setGlobalModeUI('demo')">DEMO</button>
+          <button class="mode-btn mode-live" data-mode="live" onclick="setGlobalModeUI('live')">LIVE</button>
+        </div>
+      </div>
+
       <!-- ── P&L Performance (center) ── -->
       <div class="header-perf" id="header-perf">
         <!-- Metrics row -->
@@ -162,14 +172,6 @@
         <div class="card-body">
           <div class="form-grid">
             <div class="form-group">
-              <label>Mode</label>
-              <select id="s-mode">
-                <option value="test">Test (Testnet)</option>
-                <option value="demo">Demo (Mainnet Demo)</option>
-                <option value="live">Live (Real Money)</option>
-              </select>
-            </div>
-            <div class="form-group">
               <label>Timeframe (min)</label>
               <input type="number" id="s-timeframe" value="60" />
             </div>
@@ -244,14 +246,6 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
         </div>
         <div class="card-body">
           <div class="form-grid" style="grid-template-columns: repeat(4, 1fr)">
-            <div class="form-group">
-              <label>Mode</label>
-              <select id="e-mode">
-                <option value="test">Test (Testnet)</option>
-                <option value="demo">Demo (Mainnet Demo)</option>
-                <option value="live">Live (Real Money)</option>
-              </select>
-            </div>
             <div class="form-group">
               <label>Ticker 1</label>
               <input type="text" id="e-ticker1" placeholder="e.g. BIOUSDT" />

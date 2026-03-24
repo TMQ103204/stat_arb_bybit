@@ -16,7 +16,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 # CONFIG VARIABLES
 # mode options: "test" (testnet), "demo" (mainnet demo - real prices, virtual money), "live" (real money)
-mode = "demo"
+mode = "live"
 ticker_1 = "APEUSDT"
 ticker_2 = "MEUSDT"
 signal_positive_ticker = ticker_2

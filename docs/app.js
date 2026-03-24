@@ -104,11 +104,37 @@ setInterval(updateClock, 1000);
 // CONFIG
 // ═══════════════════════════════════════════════════════════════════
 
+function setGlobalModeUI(mode, skipSave = false) {
+  const hidden = document.getElementById("global-mode");
+  if (!hidden) return;
+  hidden.value = mode;
+
+  document.querySelectorAll(".mode-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.mode === mode);
+  });
+
+  if (!skipSave) {
+    onGlobalModeChange();
+  }
+}
+
+async function onGlobalModeChange() {
+  const mode = document.getElementById("global-mode").value;
+  toast("Switching entire system to " + mode.toUpperCase() + " mode...", "info");
+
+  // Save the new mode in BOTH configuration files
+  await saveStrategyConfig();
+  await saveExecutionConfig();
+
+  // Reload P&L performance for the newly selected environment
+  loadPerformance(currentPerfStartMs, currentPerfEndMs);
+}
+
 async function loadStrategyConfig() {
   try {
     const cfg = await api("/api/config/strategy");
     if (cfg.error) return toast(cfg.error, "error");
-    document.getElementById("s-mode").value = cfg.mode;
+    setGlobalModeUI(cfg.mode, true);
     document.getElementById("s-timeframe").value = cfg.timeframe;
     document.getElementById("s-kline").value = cfg.kline_limit;
     document.getElementById("s-zscore-win").value = cfg.z_score_window;
@@ -126,7 +152,7 @@ async function saveStrategyConfig() {
     document.getElementById("s-min-zero-cross").value,
   );
   const data = {
-    mode: document.getElementById("s-mode").value,
+    mode: document.getElementById("global-mode").value,
     timeframe: parseInt(document.getElementById("s-timeframe").value),
     kline_limit: parseInt(document.getElementById("s-kline").value),
     z_score_window: parseInt(document.getElementById("s-zscore-win").value),
@@ -149,7 +175,7 @@ async function loadExecutionConfig() {
   try {
     const cfg = await api("/api/config/execution");
     if (cfg.error) return toast(cfg.error, "error");
-    document.getElementById("e-mode").value = cfg.mode;
+    setGlobalModeUI(cfg.mode, true);
     document.getElementById("e-ticker1").value = cfg.ticker_1;
     document.getElementById("e-ticker2").value = cfg.ticker_2;
     document.getElementById("e-capital").value = cfg.tradeable_capital_usdt;
@@ -170,7 +196,7 @@ async function loadExecutionConfig() {
 
 async function saveExecutionConfig() {
   const data = {
-    mode: document.getElementById("e-mode").value,
+    mode: document.getElementById("global-mode").value,
     ticker_1: document.getElementById("e-ticker1").value,
     ticker_2: document.getElementById("e-ticker2").value,
     tradeable_capital_usdt: parseFloat(
