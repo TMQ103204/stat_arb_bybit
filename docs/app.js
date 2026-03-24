@@ -579,6 +579,16 @@ async function loadBacktest() {
   }
 }
 
+function refreshBacktestChart() {
+  const sym1 = document.getElementById("e-ticker1").value.trim();
+  const sym2 = document.getElementById("e-ticker2").value.trim();
+  if (sym1 && sym2) {
+    fetchDynamicBacktest(sym1, sym2);
+  } else {
+    loadBacktest();
+  }
+}
+
 
 function renderBacktestChart(data, cols) {
   const labels = data.map((_, i) => i);
@@ -655,7 +665,7 @@ function renderBacktestChart(data, cols) {
           },
           title: {
             display: true,
-            text: "Normalized Prices (Spread Visualization)",
+            text: "Normalized Prices",
             color: "#f8fafc",
             font: { family: "Outfit", size: 14 },
           },
