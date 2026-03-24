@@ -441,8 +441,8 @@ function selectPair(sym1, sym2) {
   // Start realtime z-score for this pair
   _startSelectedZscore(sym1, sym2);
 
-  // Load chart
-  fetchDynamicBacktest(sym1, sym2);
+  // Auto-save execution config (this will also load the chart)
+  saveExecutionConfig();
 }
 
 // ── Z-Score History Modal ───────────────────────────────────────────────────
