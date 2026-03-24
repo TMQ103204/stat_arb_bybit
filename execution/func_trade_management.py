@@ -244,11 +244,7 @@ def manage_new_trades(kill_switch):
                                 # Without this, get_positions() returns size=0 and the
                                 # close order is silently skipped, leaving a naked leg open.
                                 time.sleep(3)
-                                close_all_positions(kill_switch)
-                                # BUG FIX #1: Return kill_switch=0 so main loop goes back to
-                                # SEEKING TRADES, NOT to HOLDING. The original code fell through
-                                # to kill_switch=1 which falsely signalled a full hedge.
-                                kill_switch = 0
+                                kill_switch = close_all_positions(kill_switch)
                                 return kill_switch, signal_side
                             else:
                                 logger.warning(
@@ -299,11 +295,7 @@ def manage_new_trades(kill_switch):
                                 # Without this, get_positions() returns size=0 and the
                                 # close order is silently skipped, leaving a naked leg open.
                                 time.sleep(3)
-                                close_all_positions(kill_switch)
-                                # BUG FIX #1: Return kill_switch=0 so main loop goes back to
-                                # SEEKING TRADES, NOT to HOLDING. The original code fell through
-                                # to kill_switch=1 which falsely signalled a full hedge.
-                                kill_switch = 0
+                                kill_switch = close_all_positions(kill_switch)
                                 return kill_switch, signal_side
                             else:
                                 logger.warning(

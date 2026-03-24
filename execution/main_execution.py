@@ -110,9 +110,11 @@ if __name__ == "__main__":
                     orphan_ticker
                 )
                 time.sleep(3)  # let Bybit API settle before querying size
-                close_all_positions(kill_switch)
-                kill_switch = 0
-                status_dict["message"] = "Orphan half-position closed. Seeking new trades."
+                kill_switch = close_all_positions(kill_switch)
+                if kill_switch == 0:
+                    status_dict["message"] = "Orphan half-position closed. Seeking new trades."
+                else:
+                    status_dict["message"] = "Failed to close orphan. Retrying..."
                 save_status(status_dict)
 
             # Check for signal and place new trades
