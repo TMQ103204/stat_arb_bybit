@@ -542,9 +542,14 @@ function sortPairs(col) {
 
 
 async function fetchDynamicBacktest(sym1, sym2) {
-  toast(`Loading chart for ${sym1} / ${sym2}...`, "info");
+  toast(`Loading live chart for ${sym1} / ${sym2}...`, "info");
   try {
-    const res = await api(`/api/backtest/pair?sym1=${sym1}&sym2=${sym2}`);
+    // Try live endpoint first (fetches fresh klines from Bybit)
+    let res = await api(`/api/backtest/pair/live?sym1=${sym1}&sym2=${sym2}`);
+    // Fallback to cached endpoint if live fails
+    if (res.error) {
+      res = await api(`/api/backtest/pair?sym1=${sym1}&sym2=${sym2}`);
+    }
     if (res.error) return toast(res.error, "error");
     if (!res.data || res.data.length === 0) return;
     const data = res.data;
@@ -552,7 +557,7 @@ async function fetchDynamicBacktest(sym1, sym2) {
       (c) => c !== "" && !c.toLowerCase().includes("unnamed"),
     );
     renderBacktestChart(data, cols);
-    toast(`Chart updated for ${sym1} / ${sym2}`, "success");
+    toast(`Chart updated to now for ${sym1} / ${sym2}`, "success");
   } catch (e) {
     console.error(e);
     toast("Error loading pair data for chart: " + e.message, "error");

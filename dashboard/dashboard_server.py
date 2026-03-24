@@ -517,6 +517,83 @@ def get_backtest_pair():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+@app.route("/api/backtest/pair/live", methods=["GET"])
+def get_backtest_pair_live():
+    """Fetch LIVE klines from Bybit and compute spread/zscore for charting.
+    Uses the same timeframe/kline_limit from execution config so the chart
+    always reflects the current trading window up to now."""
+    try:
+        import math as _math
+
+        sym1 = request.args.get('sym1', '').strip().upper()
+        sym2 = request.args.get('sym2', '').strip().upper()
+        if not sym1 or not sym2:
+            return jsonify({"error": "Missing sym1 or sym2"}), 400
+
+        exec_cfg = parse_execution_config()
+        kline_limit = exec_cfg.get("kline_limit", 200)
+        timeframe   = exec_cfg.get("timeframe", 60)
+
+        # Ensure paths
+        for p in (str(STRATEGY_DIR), str(EXECUTION_DIR), str(BASE_DIR)):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+
+        from func_cointegration import calculate_spread, calculate_zscore
+
+        hedge_ratio = _get_hedge_ratio(sym1, sym2)
+
+        sess = _get_pub_session()
+        r1 = sess.get_kline(category="linear", symbol=sym1,
+                            interval=str(timeframe), limit=kline_limit)
+        r2 = sess.get_kline(category="linear", symbol=sym2,
+                            interval=str(timeframe), limit=kline_limit)
+
+        kl1 = list(reversed(r1.get("result", {}).get("list", [])))
+        kl2 = list(reversed(r2.get("result", {}).get("list", [])))
+        if not kl1 or not kl2:
+            return jsonify({"error": "No kline data returned from Bybit"}), 500
+
+        n = min(len(kl1), len(kl2))
+        p1 = [float(kl1[i][4]) for i in range(n)]
+        p2 = [float(kl2[i][4]) for i in range(n)]
+
+        if len(p1) < 20:
+            return jsonify({"error": "Insufficient data points"}), 400
+
+        if hedge_ratio is None:
+            import numpy as _np
+            hedge_ratio = float(_np.polyfit(p2, p1, 1)[0])
+
+        spread  = calculate_spread(p1, p2, hedge_ratio)
+        zscores = list(calculate_zscore(spread))
+
+        def safe(val):
+            try:
+                f = float(val)
+                return None if _math.isnan(f) else f
+            except Exception:
+                return None
+
+        rows = []
+        for i in range(len(p1)):
+            rows.append({
+                sym1: p1[i],
+                sym2: p2[i],
+                "Spread": safe(spread[i]) if hasattr(spread, '__getitem__') else None,
+                "ZScore": safe(zscores[i]) if i < len(zscores) else None,
+            })
+
+        return jsonify({
+            "data": rows,
+            "columns": [sym1, sym2, "Spread", "ZScore"],
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 @app.route("/api/pairs", methods=["GET"])
 def get_pairs():
     try:
