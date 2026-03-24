@@ -234,8 +234,11 @@ if __name__ == "__main__":
                 kill_switch = close_all_positions(kill_switch)
                 peak_profit_pct = 0.0  # reset trailing peak for the next trade cycle
 
-                # Sleep after closing — let market settle before seeking new signal
-                time.sleep(60)
+                # Sleep after closing — let market settle before seeking new signal.
+                # Extended cooldown prevents rapid re-entry when Z-score remains extreme.
+                cooldown_seconds = 300  # 5 minutes
+                logger.info("Post-close cooldown: sleeping %d seconds...", cooldown_seconds)
+                time.sleep(cooldown_seconds)
 
                 # ── Auto-Trade Check ──
                 if not auto_trade:

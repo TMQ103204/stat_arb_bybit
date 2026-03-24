@@ -49,6 +49,18 @@ def manage_new_trades(kill_switch):
     zscore, signal_sign_positive = latest
     zscore = _to_float(zscore)
 
+    # ── Stop-loss zone guard ──────────────────────────────────────────────────
+    # If Z-score is at or above the stop-loss threshold, do NOT open new trades.
+    # This prevents the destructive loop: open → stop-loss → re-open → stop-loss.
+    if abs(zscore) >= float(zscore_stop_loss):
+        logger.warning(
+            "Z-score %.4f is in stop-loss zone (>= %.4f). "
+            "Skipping new trade entry to prevent re-entry loop.",
+            zscore, float(zscore_stop_loss)
+        )
+        return kill_switch, signal_side
+    # ──────────────────────────────────────────────────────────────────────────
+
     # Switch to hot if meets signal threshold
     # Note: You can add in coint-flag check too if you want extra vigilence
     if abs(zscore) > float(signal_trigger_thresh):
