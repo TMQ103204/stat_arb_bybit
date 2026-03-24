@@ -193,10 +193,18 @@ def manage_new_trades(kill_switch):
                     # Check long order status
                     if counts_long == 1:
                         order_status_long = check_order(long_ticker, order_long_id, remaining_capital_long, "Long")
+                        # Bug Fix: check_order can return None on API error – treat as still waiting
+                        if order_status_long is None:
+                            logger.warning("check_order returned None for long %s – treating as Order Active", long_ticker)
+                            order_status_long = "Order Active"
 
                     # Check short order status
                     if counts_short == 1:
                         order_status_short = check_order(short_ticker, order_short_id, remaining_capital_short, "Short")
+                        # Bug Fix: check_order can return None on API error – treat as still waiting
+                        if order_status_short is None:
+                            logger.warning("check_order returned None for short %s – treating as Order Active", short_ticker)
+                            order_status_short = "Order Active"
 
                     logger.info("Long: %s | Short: %s | zscore: %.4f", order_status_long, order_status_short, zscore_new)
 
@@ -326,9 +334,30 @@ def manage_new_trades(kill_switch):
                                 )
 
                 else:
-                    # Cancel all active orders
+                    # Z-score dropped below threshold – cancel all pending orders
+                    logger.warning(
+                        "Z-score %.4f dropped below active threshold. Cancelling all orders.",
+                        zscore_new
+                    )
                     session_private.cancel_all_orders(category="linear", symbol=signal_positive_ticker)
                     session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
+
+                    # ── Half-position guard ────────────────────────────────────────────────
+                    # If one leg already filled but the other didn't, we have an unhedged
+                    # position. Close everything immediately rather than entering HOLDING.
+                    long_has_pos  = order_status_long  in ("Trade Complete", "Position Filled")
+                    short_has_pos = order_status_short in ("Trade Complete", "Position Filled")
+                    if long_has_pos or short_has_pos:
+                        logger.critical(
+                            "HALF-POSITION DETECTED on z-score exit: long=%s short=%s. "
+                            "Closing all positions to avoid unhedged exposure.",
+                            order_status_long, order_status_short
+                        )
+                        time.sleep(3)  # let Bybit register the fill before querying size
+                        kill_switch = close_all_positions(kill_switch)
+                        return kill_switch, signal_side
+                    # ──────────────────────────────────────────────────────────────────────
+
                     kill_switch = 1
 
     # Output status
