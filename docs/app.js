@@ -10,9 +10,15 @@ let API = localStorage.getItem("statarb_api_url") || DEFAULT_API;
 // ── State ──────────────────────────────────────────────────────────
 let strategyPolling = null;
 let executionPolling = null;
-let liveZscorePolling = null;
 let backtestChart = null;
 let connectionOk = false;
+
+// ── Selected-pair Z-Score state ─────────────────────────────────────
+let _selectedPair      = null;  // {sym1, sym2}
+let _zscoreInterval    = null;  // realtime 2s interval
+let _zscoreHistoryOpen = false; // is history modal open
+let _zscoreHistory     = [];    // [{t, z, label}, ...] accumulated
+let _histScrolledUp    = false; // user scrolled up in history list
 
 // ── Helpers ────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
@@ -72,11 +78,11 @@ function updateConnectionUI(connected) {
   if (connected) {
     dot.className = "status-dot live";
     label.textContent = "CONNECTED";
-    label.style.color = "var(--green)";
+    label.style.color = "var(--success)";
   } else {
     dot.className = "status-dot error";
     label.textContent = "DISCONNECTED";
-    label.style.color = "var(--red)";
+    label.style.color = "var(--danger)";
   }
 }
 
@@ -183,6 +189,14 @@ async function loadExecutionConfig() {
     document.getElementById("e-stoploss").value = cfg.stop_loss_fail_safe;
     document.getElementById("e-zstop").value = cfg.zscore_stop_loss;
     document.getElementById("e-limit").checked = cfg.limit_order_basis;
+    const limitToggle = document.getElementById("e-limit").nextElementSibling;
+    if (limitToggle) limitToggle.classList.toggle("active", cfg.limit_order_basis);
+
+    const autoTrade = cfg.auto_trade !== false;
+    document.getElementById("e-autotrade").checked = autoTrade;
+    const autoToggle = document.getElementById("e-autotrade").nextElementSibling;
+    if (autoToggle) autoToggle.classList.toggle("active", autoTrade);
+
     document.getElementById("e-timeframe").value = cfg.timeframe;
     document.getElementById("e-kline").value = cfg.kline_limit;
     document.getElementById("e-zscore-win").value = cfg.z_score_window;
@@ -210,6 +224,7 @@ async function saveExecutionConfig() {
     ),
     zscore_stop_loss: parseFloat(document.getElementById("e-zstop").value),
     limit_order_basis: document.getElementById("e-limit").checked,
+    auto_trade: document.getElementById("e-autotrade").checked,
     timeframe: parseInt(document.getElementById("e-timeframe").value),
     kline_limit: parseInt(document.getElementById("e-kline").value),
     z_score_window: parseInt(document.getElementById("e-zscore-win").value),
@@ -310,6 +325,7 @@ async function syncAfterStrategy() {
 
 let pairsData = [];
 let pairsSort = { col: null, asc: false };
+const _zscoreCache = {}; // key: "SYM1|SYM2", value: { z, color, text }
 
 async function loadPairs() {
   try {
@@ -328,21 +344,170 @@ function renderPairs() {
   const sorted = getSortedPairs();
   tbody.innerHTML = sorted
     .slice(0, 100)
-    .map(
-      (p) => `
-    <tr>
-      <td>${escHtml(p.sym_1)}</td>
-      <td>${escHtml(p.sym_2)}</td>
+    .map((p) => {
+      const s1 = escHtml(p.sym_1), s2 = escHtml(p.sym_2);
+      const zid = `z-${s1}|${s2}`;
+      const cached = _zscoreCache[`${s1}|${s2}`];
+      const zClass = cached ? (cached.z >= 0 ? 'zscore-pos' : 'zscore-neg') : '';
+      const zText  = cached ? cached.text : "—";
+      const isSelected = _selectedPair &&
+        _selectedPair.sym1 === p.sym_1 && _selectedPair.sym2 === p.sym_2;
+      return `
+    <tr class="pair-row${isSelected ? ' pair-row-selected' : ''}" id="row-${s1}|${s2}">
+      <td>${s1}</td>
+      <td>${s2}</td>
       <td>${p.p_value}</td>
       <td>${p.t_value}</td>
       <td>${p.c_value}</td>
       <td>${p.hedge_ratio}</td>
       <td><strong>${p.zero_crossings}</strong></td>
-      <td><button class="btn-select-pair" onclick="selectPair('${escHtml(p.sym_1)}','${escHtml(p.sym_2)}')">Select</button></td>
-    </tr>
-  `,
-    )
+      <td id="${zid}" class="zscore-cell ${zClass}"
+          onclick="openZscoreModal('${s1}','${s2}')">${zText}</td>
+      <td><button class="btn-select-pair" onclick="selectPair('${s1}','${s2}')">Select</button></td>
+    </tr>`;
+    })
     .join("");
+}
+
+// ── Selected-pair realtime Z-Score ──────────────────────────────────────────
+function _startSelectedZscore(sym1, sym2) {
+  if (_zscoreInterval) clearInterval(_zscoreInterval);
+
+  const updateCell = async () => {
+    try {
+      const res = await api(`/api/pairs/zscore?sym1=${sym1}&sym2=${sym2}`);
+      if (res.zscore === undefined) return;
+      const z = Number(res.zscore);
+      const colorCls = z >= 0 ? 'zscore-pos' : 'zscore-neg';
+      const text  = z.toFixed(3);
+
+      // Store in cache so renderPairs can bake it in on next re-render
+      _zscoreCache[`${sym1}|${sym2}`] = { z, text };
+
+      // Update the cell directly (fast path, no full re-render)
+      const cell = document.getElementById(`z-${sym1}|${sym2}`);
+      if (cell) {
+        cell.textContent = text;
+        cell.classList.remove('zscore-pos', 'zscore-neg');
+        cell.classList.add(colorCls);
+      }
+
+      // If history modal is open, append new point and update live badge
+      if (_zscoreHistoryOpen) {
+        const now = new Date();
+        const label = now.getHours().toString().padStart(2,'0') + ':' +
+                      now.getMinutes().toString().padStart(2,'0');
+        const entry = { t: Date.now(), z, label };
+        const lastT = _zscoreHistory.length
+          ? _zscoreHistory[_zscoreHistory.length - 1].t : 0;
+        if (entry.t - lastT > 1000) {
+          _zscoreHistory.push(entry);
+          appendHistoryEntry(entry);
+        }
+        const liveVal = document.getElementById("zscore-live-val");
+        if (liveVal) {
+          liveVal.textContent = z.toFixed(4);
+          liveVal.style.color = color;
+        }
+      }
+    } catch (_) { /* offline */ }
+  };
+
+  updateCell();
+  _zscoreInterval = setInterval(updateCell, 2000);
+}
+
+function selectPair(sym1, sym2) {
+  // Update form fields
+  document.getElementById("e-ticker1").value = sym1;
+  document.getElementById("e-ticker2").value = sym2;
+  toast(`Selected: ${sym1} / ${sym2}`, "success");
+  document.getElementById("exec-config-card").scrollIntoView({ behavior: "smooth" });
+
+  // Remove previous highlight
+  if (_selectedPair) {
+    const old = document.getElementById(`row-${_selectedPair.sym1}|${_selectedPair.sym2}`);
+    if (old) old.classList.remove("pair-row-selected");
+    const oldCell = document.getElementById(`z-${_selectedPair.sym1}|${_selectedPair.sym2}`);
+    if (oldCell) { oldCell.textContent = "—"; oldCell.style.color = ""; }
+  }
+
+  _selectedPair = { sym1, sym2 };
+
+  // Highlight new row
+  const row = document.getElementById(`row-${sym1}|${sym2}`);
+  if (row) row.classList.add("pair-row-selected");
+
+  // Start realtime z-score for this pair
+  _startSelectedZscore(sym1, sym2);
+
+  // Load chart
+  fetchDynamicBacktest(sym1, sym2);
+}
+
+// ── Z-Score History Modal ───────────────────────────────────────────────────
+async function openZscoreModal(sym1, sym2) {
+  // Ensure this pair is selected & realtime
+  if (!_selectedPair || _selectedPair.sym1 !== sym1 || _selectedPair.sym2 !== sym2) {
+    selectPair(sym1, sym2);
+  }
+
+  const modal   = document.getElementById("zscore-modal");
+  const list    = document.getElementById("zscore-history-list");
+  const titleEl = document.getElementById("zscore-modal-title");
+  const subEl   = document.getElementById("zscore-modal-sub");
+
+  titleEl.textContent = `${sym1} / ${sym2}`;
+  subEl.textContent   = "Last 24 hours – Z-Score History";
+  list.innerHTML      = '<div class="zscore-loading">Loading…</div>';
+  modal.style.display = "flex";
+  _zscoreHistoryOpen  = true;
+  _histScrolledUp     = false;
+
+  // Smart-scroll tracking
+  list.onscroll = () => {
+    const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 30;
+    _histScrolledUp = !atBottom;
+  };
+
+  try {
+    const res = await api(`/api/pairs/zscore-history?sym1=${sym1}&sym2=${sym2}`);
+    if (res.error) { list.innerHTML = `<div class="zscore-loading zscore-err">${res.error}</div>`; return; }
+    _zscoreHistory = res.history || [];
+    list.innerHTML = "";
+    _zscoreHistory.forEach(entry => appendHistoryEntry(entry, false));
+    // Scroll to bottom on initial load
+    list.scrollTop = list.scrollHeight;
+  } catch (e) {
+    list.innerHTML = '<div class="zscore-loading zscore-err">Failed to load history</div>';
+  }
+}
+
+function appendHistoryEntry(entry, autoScroll = true) {
+  const list = document.getElementById("zscore-history-list");
+  if (!list) return;
+  const z = Number(entry.z);
+  const color = z >= 0 ? "var(--success)" : "var(--danger)";
+  const bar = Math.min(Math.abs(z) / 3, 1); // normalize bar width to |z|=3
+  const row = document.createElement("div");
+  row.className = "zhist-row";
+  row.innerHTML = `
+    <span class="zhist-time">${entry.label}</span>
+    <span class="zhist-bar-wrap">
+      <span class="zhist-bar" style="width:${(bar*100).toFixed(1)}%;background:${color}"></span>
+    </span>
+    <span class="zhist-val" style="color:${color}">${z.toFixed(4)}</span>`;
+  list.appendChild(row);
+
+  if (autoScroll && !_histScrolledUp) {
+    list.scrollTop = list.scrollHeight;
+  }
+}
+
+function closeZscoreModal(event, force = false) {
+  if (!force && event && event.target !== document.getElementById("zscore-modal")) return;
+  document.getElementById("zscore-modal").style.display = "none";
+  _zscoreHistoryOpen = false;
 }
 
 function getSortedPairs() {
@@ -375,17 +540,6 @@ function sortPairs(col) {
   renderPairs();
 }
 
-function selectPair(sym1, sym2) {
-  document.getElementById("e-ticker1").value = sym1;
-  document.getElementById("e-ticker2").value = sym2;
-  toast(`Selected: ${sym1} / ${sym2}`, "success");
-  document
-    .getElementById("exec-config-card")
-    .scrollIntoView({ behavior: "smooth" });
-
-  // Dynamically load chart for selected pair
-  fetchDynamicBacktest(sym1, sym2);
-}
 
 async function fetchDynamicBacktest(sym1, sym2) {
   toast(`Loading chart for ${sym1} / ${sym2}...`, "info");
@@ -398,7 +552,6 @@ async function fetchDynamicBacktest(sym1, sym2) {
       (c) => c !== "" && !c.toLowerCase().includes("unnamed"),
     );
     renderBacktestChart(data, cols);
-    await loadLiveZscore();
     toast(`Chart updated for ${sym1} / ${sym2}`, "success");
   } catch (e) {
     console.error(e);
@@ -421,46 +574,11 @@ async function loadBacktest() {
       (c) => c !== "" && !c.toLowerCase().includes("unnamed"),
     );
     renderBacktestChart(data, cols);
-    await loadLiveZscore();
   } catch (e) {
     /* offline */
   }
 }
 
-function setMetricZscore(value, source = "backtest", meta = {}) {
-  const z = Number(value);
-  if (Number.isNaN(z)) return;
-
-  const el = document.getElementById("metric-zscore");
-  el.textContent = z.toFixed(4);
-  el.className = "metric-value " + (z >= 0 ? "positive" : "negative");
-  el.dataset.source = source;
-  if (source === "live") {
-    const pair =
-      meta.ticker_1 && meta.ticker_2
-        ? `${meta.ticker_1}/${meta.ticker_2}`
-        : "execution pair";
-    const trigger = Number(meta.signal_trigger_thresh);
-    const stop = Number(meta.zscore_stop_loss);
-    const triggerText = Number.isNaN(trigger) ? "n/a" : trigger.toFixed(2);
-    const stopText = Number.isNaN(stop) ? "n/a" : stop.toFixed(2);
-    el.title = `Live execution z-score for ${pair}. Trigger: ${triggerText}, Stop: ${stopText}.`;
-  } else {
-    el.title = "Backtest z-score from cached strategy data.";
-  }
-}
-
-async function loadLiveZscore() {
-  try {
-    const res = await api("/api/execution/zscore-live");
-    if (res.error || !res.available || res.zscore === null) return false;
-
-    setMetricZscore(res.zscore, "live", res);
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
 
 function renderBacktestChart(data, cols) {
   const labels = data.map((_, i) => i);
@@ -644,10 +762,6 @@ function renderBacktestChart(data, cols) {
   });
 
   const lastZ = zscoreData.filter((v) => v !== null);
-  if (lastZ.length > 0) {
-    const z = lastZ[lastZ.length - 1];
-    setMetricZscore(z, "backtest");
-  }
   if (symCols.length >= 2) {
     document.getElementById("metric-sym1").textContent = symCols[0];
     document.getElementById("metric-sym2").textContent = symCols[1];
@@ -722,7 +836,7 @@ function updateBotUI(running) {
   if (running) {
     dot.className = "status-dot live";
     label.textContent = "RUNNING";
-    label.style.color = "var(--green)";
+    label.style.color = "var(--success)";
     startBtn.disabled = true;
     stopBtn.disabled = false;
   } else {
@@ -762,7 +876,6 @@ async function checkBotStatus() {
     if (s.running) startExecutionPolling();
     if (s.status && s.status.message)
       document.getElementById("bot-message").textContent = s.status.message;
-    await loadLiveZscore();
   } catch (e) {
     /* offline */
   }
@@ -1005,9 +1118,6 @@ async function initDashboard() {
   loadGitStatus();
   loadBotLogs();
   loadPerformance(); // uses default PERF_DEFAULT_START_MS
-
-  if (liveZscorePolling) clearInterval(liveZscorePolling);
-  liveZscorePolling = setInterval(loadLiveZscore, 6000);
 
   if (perfPolling) clearInterval(perfPolling);
   perfPolling = setInterval(() => loadPerformance(currentPerfStartMs, currentPerfEndMs), 60000);

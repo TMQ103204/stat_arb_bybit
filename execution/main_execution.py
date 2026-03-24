@@ -14,6 +14,7 @@ if PROJECT_ROOT not in sys.path:
 # General Imports
 from config_execution_api import signal_positive_ticker
 from config_execution_api import signal_negative_ticker
+from config_execution_api import auto_trade
 from func_position_calls import open_position_confirmation
 from func_position_calls import active_position_confirmation
 from func_trade_management import manage_new_trades
@@ -235,6 +236,13 @@ if __name__ == "__main__":
 
                 # Sleep after closing — let market settle before seeking new signal
                 time.sleep(60)
+
+                # ── Auto-Trade Check ──
+                if not auto_trade:
+                    logger.info("Auto-trade is disabled. Shutting down bot gracefully.")
+                    status_dict["message"] = "Positions closed. Auto-trade is OFF. Bot stopped."
+                    save_status(status_dict)
+                    sys.exit(0)
 
         except Exception as e:
             logger.exception("Unexpected error in main loop: %s", e)

@@ -120,6 +120,8 @@ def parse_execution_config():
     config["signal_negative_ticker"] = m.group(1) if m else "ticker_1"
     m = re.search(r'^limit_order_basis\s*=\s*(True|False)', content, re.MULTILINE)
     config["limit_order_basis"] = m.group(1) == "True" if m else True
+    m = re.search(r'^auto_trade\s*=\s*(True|False)', content, re.MULTILINE)
+    config["auto_trade"] = m.group(1) == "True" if m else True
     m = re.search(r'^tradeable_capital_usdt\s*=\s*([\d.]+)', content, re.MULTILINE)
     config["tradeable_capital_usdt"] = float(m.group(1)) if m else 10000
     m = re.search(r'^stop_loss_fail_safe\s*=\s*([\d.]+)', content, re.MULTILINE)
@@ -152,6 +154,13 @@ def write_execution_config(config):
     content = re.sub(r'^ticker_2\s*=\s*["\'][^"\']+["\']', f'ticker_2 = "{config["ticker_2"]}"', content, flags=re.MULTILINE)
     content = re.sub(r'^limit_order_basis\s*=\s*(True|False)',
                      f'limit_order_basis = {config["limit_order_basis"]}', content, flags=re.MULTILINE)
+    if "auto_trade" in config:
+        if re.search(r'^auto_trade\s*=\s*(True|False)', content, re.MULTILINE):
+            content = re.sub(r'^auto_trade\s*=\s*(True|False)',
+                             f'auto_trade = {config["auto_trade"]}', content, flags=re.MULTILINE)
+        else:
+            content = re.sub(r'(^limit_order_basis\s*=\s*(?:True|False).*$)',
+                             r'\1\nauto_trade = ' + str(config["auto_trade"]), content, flags=re.MULTILINE)
     content = re.sub(r'^tradeable_capital_usdt\s*=\s*[\d.]+',
                      f'tradeable_capital_usdt = {config["tradeable_capital_usdt"]}', content, flags=re.MULTILINE)
     content = re.sub(r'^stop_loss_fail_safe\s*=\s*[\d.]+',
@@ -521,6 +530,166 @@ def get_pairs():
         return jsonify({"pairs": pairs})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# ── Z-Score utilities for pairs table ────────────────────────────────────────
+_pairs_zscore_cache: dict = {}   # {(sym1, sym2): (zscore_float, ts)}
+_pairs_history_cache: dict = {}  # {(sym1, sym2): ([{t,z}, ...], ts)}
+_ZSCORE_TTL   = 10   # seconds – current z-score cache
+_HISTORY_TTL  = 30   # seconds – 24h history cache
+_pub_anon_session = None         # unauthenticated pybit session (created once)
+
+
+def _get_pub_session():
+    """Return a cached unauthenticated pybit session for public kline calls."""
+    global _pub_anon_session
+    if _pub_anon_session is None:
+        from pybit.unified_trading import HTTP as _H
+        _pub_anon_session = _H()
+    return _pub_anon_session
+
+
+def _get_hedge_ratio(sym1, sym2):
+    """Read hedge_ratio from cached CSV; falls back to None if not found."""
+    if not COINTEGRATED_CSV.exists():
+        return None
+    with open(COINTEGRATED_CSV, newline="", encoding="utf-8") as f:
+        import csv as _csv2
+        for row in _csv2.DictReader(f):
+            if row.get("sym_1", "").upper() == sym1 and row.get("sym_2", "").upper() == sym2:
+                try:
+                    return float(row["hedge_ratio"])
+                except (KeyError, ValueError):
+                    return None
+    return None
+
+
+def _compute_pair_zscores(sym1, sym2, kline_limit=200, timeframe_override=None):
+    """
+    Fetch klines for sym1/sym2 and return (zscore_list, timestamps_ms_list,
+    hedge_ratio) or raise on error. zscore_list and timestamps_ms_list are
+    aligned (same length), oldest-first.
+    """
+    import math as _math
+
+    # Ensure strategy dir is on sys.path for func_cointegration
+    for p in (str(STRATEGY_DIR), str(EXECUTION_DIR), str(BASE_DIR)):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+    from func_cointegration import calculate_spread, calculate_zscore
+
+    hedge_ratio = _get_hedge_ratio(sym1, sym2)
+    exec_cfg    = parse_execution_config()
+    timeframe   = timeframe_override or exec_cfg.get("timeframe", 60)
+
+    sess = _get_pub_session()
+    r1 = sess.get_kline(category="linear", symbol=sym1,
+                        interval=str(timeframe), limit=kline_limit)
+    r2 = sess.get_kline(category="linear", symbol=sym2,
+                        interval=str(timeframe), limit=kline_limit)
+
+    kl1 = r1.get("result", {}).get("list", [])
+    kl2 = r2.get("result", {}).get("list", [])
+    if not kl1 or not kl2:
+        raise ValueError("No kline data returned")
+
+    # Bybit: newest-first → reverse to chronological. k[0]=ts_ms, k[4]=close
+    kl1 = list(reversed(kl1))
+    kl2 = list(reversed(kl2))
+
+    n = min(len(kl1), len(kl2))
+    p1 = [float(kl1[i][4]) for i in range(n) if not _math.isnan(float(kl1[i][4]))]
+    p2 = [float(kl2[i][4]) for i in range(n) if not _math.isnan(float(kl2[i][4]))]
+    ts = [int(kl1[i][0]) for i in range(min(len(p1), len(p2)))]
+
+    n2 = min(len(p1), len(p2))
+    if n2 < 20:
+        raise ValueError("Insufficient data")
+
+    p1, p2, ts = p1[-n2:], p2[-n2:], ts[-n2:]
+
+    if hedge_ratio is None:
+        import numpy as _np
+        hedge_ratio = float(_np.polyfit(p2, p1, 1)[0])
+
+    spread  = calculate_spread(p1, p2, hedge_ratio)
+    zscores = list(calculate_zscore(spread))
+
+    return zscores, ts, hedge_ratio
+
+
+@app.route("/api/pairs/zscore", methods=["GET"])
+def get_pair_zscore():
+    """Current z-score for a pair. 10 s server-side cache."""
+    sym1 = request.args.get("sym1", "").strip().upper()
+    sym2 = request.args.get("sym2", "").strip().upper()
+    if not sym1 or not sym2:
+        return jsonify({"error": "Missing sym1 or sym2"}), 400
+
+    cached = _pairs_zscore_cache.get((sym1, sym2))
+    if cached and (time.time() - cached[1]) < _ZSCORE_TTL:
+        return jsonify({"zscore": cached[0], "sym1": sym1, "sym2": sym2, "cached": True})
+
+    try:
+        import math as _math
+        zscores, _, _ = _compute_pair_zscores(sym1, sym2)
+        last_z = next((float(v) for v in reversed(zscores)
+                       if not _math.isnan(float(v))), None)
+        if last_z is None:
+            return jsonify({"error": "Could not compute z-score"}), 500
+        _pairs_zscore_cache[(sym1, sym2)] = (last_z, time.time())
+        return jsonify({"zscore": last_z, "sym1": sym1, "sym2": sym2, "cached": False})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route("/api/pairs/zscore-history", methods=["GET"])
+def get_pair_zscore_history():
+    """
+    Return up to 24 h of z-score data points, oldest-first.
+    Each entry: { t: epoch_ms, z: float, label: 'HH:MM' }
+    30 s server-side cache.
+    """
+    sym1 = request.args.get("sym1", "").strip().upper()
+    sym2 = request.args.get("sym2", "").strip().upper()
+    if not sym1 or not sym2:
+        return jsonify({"error": "Missing sym1 or sym2"}), 400
+
+    cached = _pairs_history_cache.get((sym1, sym2))
+    if cached and (time.time() - cached[1]) < _HISTORY_TTL:
+        return jsonify({"history": cached[0], "sym1": sym1, "sym2": sym2, "cached": True})
+
+    try:
+        import math as _math
+        from datetime import datetime, timezone, timedelta
+
+        # Use 5-min klines for granular history (200 × 5min ≈ 16 hours)
+        zscores, timestamps, _ = _compute_pair_zscores(sym1, sym2, kline_limit=200, timeframe_override=5)
+
+        # Build output array; skip NaN entries (z-score window warm-up)
+        ict = timezone(timedelta(hours=7))
+        history = []
+        for ts_ms, z in zip(timestamps, zscores):
+            try:
+                fz = float(z)
+                if _math.isnan(fz):
+                    continue
+                dt = datetime.fromtimestamp(ts_ms / 1000, tz=ict)
+                history.append({
+                    "t": ts_ms,
+                    "z": round(fz, 4),
+                    "label": dt.strftime("%H:%M")
+                })
+            except (TypeError, ValueError):
+                continue
+
+        _pairs_history_cache[(sym1, sym2)] = (history, time.time())
+        return jsonify({"history": history, "sym1": sym1, "sym2": sym2, "cached": False})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
 
 
 @app.route("/api/backtest", methods=["GET"])
