@@ -32,7 +32,6 @@ zscore_stop_loss = 5      # emergency stop-loss: absolute z-score beyond which a
 time_stop_loss_hours = 48 # maximum time in hours to hold a position before emergency close
 max_session_loss_pct = 3.0 # halt bot entirely if cumulative session loss exceeds this % of tradeable capital
 
-# ── Hybrid order strategy ──────────────────────────────────────────────────
 # If |z_score| >= market_order_zscore_thresh AND expected net profit >= min_profit_pct
 # the bot will use Market orders instead of aggressive Limit orders.
 # Set market_order_zscore_thresh very high (e.g. 99) to disable market order entirely.
