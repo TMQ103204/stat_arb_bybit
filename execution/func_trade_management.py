@@ -152,7 +152,8 @@ def manage_new_trades(kill_switch):
                         session_private.cancel_all_orders(category="linear", symbol=signal_positive_ticker)
                         session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
                         time.sleep(3)
-                        kill_switch = close_all_positions(kill_switch)
+                        close_all_positions(kill_switch)
+                        kill_switch = 2  # signal main loop to handle auto_trade + circuit breaker
                         return kill_switch, signal_side
                     counts_long = 1 if order_long_id else 0
                     if counts_long == 1 and not is_retry_long:
@@ -168,7 +169,8 @@ def manage_new_trades(kill_switch):
                         session_private.cancel_all_orders(category="linear", symbol=signal_positive_ticker)
                         session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
                         time.sleep(3)
-                        kill_switch = close_all_positions(kill_switch)
+                        close_all_positions(kill_switch)
+                        kill_switch = 2  # signal main loop to handle auto_trade + circuit breaker
                         return kill_switch, signal_side
                     counts_short = 1 if order_short_id else 0
                     if counts_short == 1 and not is_retry_short:
@@ -296,7 +298,8 @@ def manage_new_trades(kill_switch):
                                 # Without this, get_positions() returns size=0 and the
                                 # close order is silently skipped, leaving a naked leg open.
                                 time.sleep(3)
-                                kill_switch = close_all_positions(kill_switch)
+                                close_all_positions(kill_switch)
+                                kill_switch = 2  # signal main loop to handle auto_trade + circuit breaker
                                 return kill_switch, signal_side
                             else:
                                 logger.warning(
@@ -347,7 +350,8 @@ def manage_new_trades(kill_switch):
                                 # Without this, get_positions() returns size=0 and the
                                 # close order is silently skipped, leaving a naked leg open.
                                 time.sleep(3)
-                                kill_switch = close_all_positions(kill_switch)
+                                close_all_positions(kill_switch)
+                                kill_switch = 2  # signal main loop to handle auto_trade + circuit breaker
                                 return kill_switch, signal_side
                             else:
                                 logger.warning(
@@ -398,7 +402,8 @@ def manage_new_trades(kill_switch):
                             order_status_long, order_status_short
                         )
                         time.sleep(3)  # let Bybit register the fill before querying size
-                        kill_switch = close_all_positions(kill_switch)
+                        close_all_positions(kill_switch)
+                        kill_switch = 2  # signal main loop to handle auto_trade + circuit breaker
                         return kill_switch, signal_side
                     # ──────────────────────────────────────────────────────────────────────
 
