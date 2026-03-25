@@ -220,4 +220,4 @@ def calculate_exact_live_profit(long_ticker, short_ticker):
 
     except Exception as e:
         logger.warning("calculate_exact_live_profit failed (%s %s): %s", long_ticker, short_ticker, e)
-        return 0.0, 0.0
+        return None, None

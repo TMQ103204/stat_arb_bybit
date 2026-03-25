@@ -59,6 +59,8 @@ if __name__ == "__main__":
     kill_switch = 0
     position_open_time = 0.0
     peak_profit_pct = 0.0   # highest net profit % seen while in HOLDING; used by trailing TP
+    session_realized_loss = 0.0  # cumulative realized loss (USDT) this session — for circuit breaker
+    last_close_pnl = 0.0  # net PnL of the last tick before close — used by circuit breaker
     save_status(status_dict)
 
     # Set leverage in case forgotten to do so on the platform
@@ -166,6 +168,15 @@ if __name__ == "__main__":
                 # Live net PnL — accounts for exact entry/exit fees per coin (0.055% or 0.11%)
                 live_net_pnl_usdt, live_net_profit_pct = calculate_exact_live_profit(long_ticker, short_ticker)
 
+                # ── Bug #2 fix: if PnL calculation failed, skip this tick ─────────
+                if live_net_pnl_usdt is None:
+                    logger.warning("PnL calculation failed — skipping this tick.")
+                    continue
+                # ──────────────────────────────────────────────────────────────────
+
+                # Snapshot PnL for circuit breaker (used after close)
+                last_close_pnl = live_net_pnl_usdt
+
                 hold_minutes = (time.time() - position_open_time) / 60 if position_open_time > 0 else 0
 
                 logger.info(
@@ -233,6 +244,40 @@ if __name__ == "__main__":
                 save_status(status_dict)
                 kill_switch = close_all_positions(kill_switch)
                 peak_profit_pct = 0.0  # reset trailing peak for the next trade cycle
+
+                # ── Bug #4 fix: verify positions are actually closed ──────────────
+                if kill_switch == 0:
+                    time.sleep(2)
+                    still_open_p = open_position_confirmation(signal_positive_ticker)
+                    still_open_n = open_position_confirmation(signal_negative_ticker)
+                    if still_open_p or still_open_n:
+                        logger.critical(
+                            "CLOSE VERIFICATION FAILED: positions still open after close_all. "
+                            "Retrying..."
+                        )
+                        kill_switch = 2  # force retry
+                        continue
+                # ──────────────────────────────────────────────────────────────────
+
+                # ── Bug #1 fix: session loss circuit breaker ──────────────────────
+                from config_execution_api import max_session_loss_pct, tradeable_capital_usdt
+                if last_close_pnl < 0:
+                    session_realized_loss += abs(last_close_pnl)
+                session_loss_pct = (session_realized_loss / tradeable_capital_usdt) * 100 if tradeable_capital_usdt > 0 else 0
+                logger.info(
+                    "Session loss tracker: this trade %.3f USDT | cumulative %.3f USDT (%.2f%%)",
+                    last_close_pnl, session_realized_loss, session_loss_pct
+                )
+                if session_loss_pct >= float(max_session_loss_pct):
+                    logger.critical(
+                        "SESSION LOSS CIRCUIT BREAKER: cumulative loss %.2f%% >= %.2f%%. HALTING BOT.",
+                        session_loss_pct, float(max_session_loss_pct)
+                    )
+                    status_dict["message"] = f"HALTED: session loss {session_loss_pct:.1f}% exceeded limit"
+                    save_status(status_dict)
+                    sys.exit(1)
+                last_close_pnl = 0.0  # reset for next trade
+                # ──────────────────────────────────────────────────────────────────
 
                 # Sleep after closing — let market settle before seeking new signal.
                 # Extended cooldown prevents rapid re-entry when Z-score remains extreme.

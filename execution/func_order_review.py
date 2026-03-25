@@ -62,3 +62,7 @@ def check_order(ticker, order_id, remaining_capital, direction="Long"):
     cancel_items = ["Cancelled", "Rejected", "PendingCancel"]
     if order_status in cancel_items:
         return "Try Again"
+
+    # Unknown or empty status — treat as failed to be safe
+    logger.warning("Unknown order status '%s' for %s — treating as Try Again", order_status, ticker)
+    return "Try Again"

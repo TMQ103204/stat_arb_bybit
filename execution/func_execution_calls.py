@@ -139,5 +139,10 @@ def initialise_order_execution(ticker, direction, capital, force_market=False, z
                     )
                     return order_result["orderId"]
             except Exception as e:
-                logger.error("Failed to place order %s %s: %s", direction, ticker, e)
+                err_str = str(e)
+                logger.error("Failed to place order %s %s: %s", direction, ticker, err_str)
+                # Insufficient balance — no point retrying
+                if "110007" in err_str:
+                    logger.critical("INSUFFICIENT BALANCE (110007) — cannot place order.")
+                    return -1  # sentinel for irrecoverable error
     return 0

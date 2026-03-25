@@ -146,6 +146,14 @@ def manage_new_trades(kill_switch):
 
                 if future_long is not None:
                     order_long_id = future_long.result()
+                    # ── Bug #6: insufficient balance sentinel ──
+                    if order_long_id == -1:
+                        logger.critical("INSUFFICIENT BALANCE on Long leg. Aborting trade entry.")
+                        session_private.cancel_all_orders(category="linear", symbol=signal_positive_ticker)
+                        session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
+                        time.sleep(3)
+                        kill_switch = close_all_positions(kill_switch)
+                        return kill_switch, signal_side
                     counts_long = 1 if order_long_id else 0
                     if counts_long == 1 and not is_retry_long:
                         remaining_capital_long -= initial_capital_usdt
@@ -154,11 +162,35 @@ def manage_new_trades(kill_switch):
 
                 if future_short is not None:
                     order_short_id = future_short.result()
+                    # ── Bug #6: insufficient balance sentinel ──
+                    if order_short_id == -1:
+                        logger.critical("INSUFFICIENT BALANCE on Short leg. Aborting trade entry.")
+                        session_private.cancel_all_orders(category="linear", symbol=signal_positive_ticker)
+                        session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
+                        time.sleep(3)
+                        kill_switch = close_all_positions(kill_switch)
+                        return kill_switch, signal_side
                     counts_short = 1 if order_short_id else 0
                     if counts_short == 1 and not is_retry_short:
                         remaining_capital_short -= initial_capital_usdt
                     is_retry_short = False
                     force_market_short = False
+
+            # ── Bug #3: Immediate asymmetry detection ─────────────────────────
+            # If one leg got an order but the other returned 0, escalate
+            # immediately to market order instead of waiting for retries.
+            one_placed = bool(order_long_id) != bool(order_short_id)
+            if one_placed and (counts_long + counts_short == 1):
+                failed_side = "Long" if not order_long_id else "Short"
+                logger.critical(
+                    "ORDER PLACEMENT ASYMMETRY: %s failed while other succeeded. "
+                    "Escalating to market order immediately.", failed_side
+                )
+                if not order_long_id:
+                    force_market_long = True
+                else:
+                    force_market_short = True
+            # ──────────────────────────────────────────────────────────────────
 
             # Update signal side
             if zscore > 0:

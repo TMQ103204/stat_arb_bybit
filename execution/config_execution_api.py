@@ -30,6 +30,7 @@ stop_loss_fail_safe = 0.15 # stop loss at market order in case of drastic event
 signal_trigger_thresh = 1.1 # z-score threshold which determines trade (must be above zero)
 zscore_stop_loss = 5      # emergency stop-loss: absolute z-score beyond which all positions are closed at market
 time_stop_loss_hours = 48 # maximum time in hours to hold a position before emergency close
+max_session_loss_pct = 3.0 # halt bot entirely if cumulative session loss exceeds this % of tradeable capital
 
 # ── Hybrid order strategy ──────────────────────────────────────────────────
 # If |z_score| >= market_order_zscore_thresh AND expected net profit >= min_profit_pct
