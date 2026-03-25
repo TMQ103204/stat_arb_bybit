@@ -58,7 +58,6 @@ if __name__ == "__main__":
     signal_side = ""
     kill_switch = 0
     position_open_time = 0.0
-    peak_profit_pct = 0.0   # highest net profit % seen while in HOLDING; used by trailing TP
     session_realized_loss = 0.0  # cumulative realized loss (USDT) this session — for circuit breaker
     last_close_pnl = 0.0  # net PnL of the last tick before close — used by circuit breaker
     save_status(status_dict)
@@ -145,7 +144,7 @@ if __name__ == "__main__":
                 status_dict["message"] = f"Re-attached to full hedge position (side={signal_side})"
                 save_status(status_dict)
 
-            # Manage open position: trailing take-profit + stop-losses
+            # Manage open position: stop-losses & take-profit
             if kill_switch == 1:
 
                 # Get and save the latest z-score
@@ -157,8 +156,7 @@ if __name__ == "__main__":
                     continue
 
                 from config_execution_api import (
-                    zscore_stop_loss, time_stop_loss_hours,
-                    min_profit_pct, trailing_callback_pct
+                    zscore_stop_loss, time_stop_loss_hours
                 )
 
                 # Determine long/short tickers from the logged signal side
@@ -184,36 +182,10 @@ if __name__ == "__main__":
                     zscore, signal_side, hold_minutes, live_net_pnl_usdt, live_net_profit_pct
                 )
 
-                # ── Trailing Take-Profit ──────────────────────────────────────────────
-                # Activates only after net profit has cleared the minimum threshold.
-                # Once active, the bot rides the profit upward and closes when it
-                # pulls back trailing_callback_pct from its all-time peak.
-
-                # Update peak as long as profit is climbing
-                if live_net_profit_pct > peak_profit_pct:
-                    peak_profit_pct = live_net_profit_pct
-
-                if peak_profit_pct >= float(min_profit_pct):
-                    # Profit has reached the activation threshold — trailing mode
-                    trailing_trigger_pct = peak_profit_pct - float(trailing_callback_pct)
-
-                    if live_net_profit_pct <= trailing_trigger_pct:
-                        logger.info(
-                            "TRAILING TAKE-PROFIT: profit pulled back to %.3f%% from peak %.3f%% "
-                            "(trigger %.3f%%). Closing position.",
-                            live_net_profit_pct, peak_profit_pct, trailing_trigger_pct
-                        )
-                        kill_switch = 2
-                    else:
-                        logger.info(
-                            "TRAILING ACTIVE: peak=%.3f%% | trigger=%.3f%% | current=%.3f%%",
-                            peak_profit_pct, trailing_trigger_pct, live_net_profit_pct
-                        )
-
-                # ── Stop-loss rules (run regardless of trailing state) ────────────────
+                # ── Exit rules ────────────────────────────────────────────────────────
 
                 # 1. Emergency stop-loss: Z-score structural breakdown
-                elif abs(zscore) > float(zscore_stop_loss):
+                if abs(zscore) > float(zscore_stop_loss):
                     logger.critical(
                         "Z-SCORE STOP LOSS REACHED: %.4f exceeds threshold %.4f",
                         zscore, float(zscore_stop_loss)
@@ -225,7 +197,7 @@ if __name__ == "__main__":
                     logger.critical("TIME STOP LOSS REACHED: position open for > %s hours.", time_stop_loss_hours)
                     kill_switch = 2
 
-                # 3. Mean-reversion take-profit (only active before trailing kicks in)
+                # 3. Mean-reversion take-profit: Z-score crossed zero
                 elif signal_side == "positive" and zscore < 0:
                     logger.info("TAKE PROFIT: Z-score crossed below 0 (was positive side)")
                     kill_switch = 2
@@ -243,7 +215,6 @@ if __name__ == "__main__":
                 status_dict["message"] = "Closing existing trades..."
                 save_status(status_dict)
                 kill_switch = close_all_positions(kill_switch)
-                peak_profit_pct = 0.0  # reset trailing peak for the next trade cycle
 
                 # ── Bug #4 fix: verify positions are actually closed ──────────────
                 if kill_switch == 0:

@@ -36,13 +36,8 @@ max_session_loss_pct = 3.0 # halt bot entirely if cumulative session loss exceed
 # the bot will use Market orders instead of aggressive Limit orders.
 # Set market_order_zscore_thresh very high (e.g. 99) to disable market order entirely.
 market_order_zscore_thresh = 99  # DISABLED — always use limit orders
-min_profit_pct = 0    # DISABLED — trailing take-profit off
+min_profit_pct = 0    # minimum expected net profit (%) to trigger market order (used by hybrid order logic)
 taker_fee_pct = 0.055  # Bybit taker fee per side (%) — used for entry sizing estimates
-
-# ── Trailing Take Profit ────────────────────────────────────────────────────
-# DISABLED — set trailing_callback_pct = 0 to disable trailing stop entirely.
-# To re-enable: set trailing_callback_pct > 0 (e.g. 0.15) and min_profit_pct > 0.
-trailing_callback_pct = 0  # DISABLED
 
 timeframe = 60 # make sure matches your strategy
 kline_limit = 200 # make sure matches your strategy
