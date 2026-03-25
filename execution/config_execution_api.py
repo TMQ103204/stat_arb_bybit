@@ -17,13 +17,13 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 # CONFIG VARIABLES
 # mode options: "test" (testnet), "demo" (mainnet demo - real prices, virtual money), "live" (real money)
 mode = "live"
-ticker_1 = "LINEAUSDT"
-ticker_2 = "SEIUSDT"
+ticker_1 = "0GUSDT"
+ticker_2 = "NEARUSDT"
 signal_positive_ticker = ticker_2
 signal_negative_ticker = ticker_1
 
 limit_order_basis = True # will ensure positions (except for Close) will be placed on limit basis
-auto_trade = True # If False, bot will gracefully stop instead of seeking new trades after a close
+auto_trade = False # If False, bot will gracefully stop instead of seeking new trades after a close
 
 tradeable_capital_usdt = 12 # total tradeable capital to be split between both pairs
 stop_loss_fail_safe = 0.15 # stop loss at market order in case of drastic event
@@ -35,14 +35,14 @@ max_session_loss_pct = 3.0 # halt bot entirely if cumulative session loss exceed
 # If |z_score| >= market_order_zscore_thresh AND expected net profit >= min_profit_pct
 # the bot will use Market orders instead of aggressive Limit orders.
 # Set market_order_zscore_thresh very high (e.g. 99) to disable market order entirely.
-market_order_zscore_thresh = 2   # |z| threshold to consider market order (above signal_trigger_thresh)
-min_profit_pct = 1    # min net profit % to: (a) allow market order entry, (b) activate trailing take-profit
+market_order_zscore_thresh = 99  # DISABLED — always use limit orders
+min_profit_pct = 0    # DISABLED — trailing take-profit off
 taker_fee_pct = 0.055  # Bybit taker fee per side (%) — used for entry sizing estimates
 
 # ── Trailing Take Profit ────────────────────────────────────────────────────
-# Once net profit >= min_profit_pct, the bot switches from Z-score crossing to
-# a trailing stop: if profit pulls back trailing_callback_pct from its peak, close.
-trailing_callback_pct = 0.15  # max drawdown from peak profit (%) before closing
+# DISABLED — set trailing_callback_pct = 0 to disable trailing stop entirely.
+# To re-enable: set trailing_callback_pct > 0 (e.g. 0.15) and min_profit_pct > 0.
+trailing_callback_pct = 0  # DISABLED
 
 timeframe = 60 # make sure matches your strategy
 kline_limit = 200 # make sure matches your strategy

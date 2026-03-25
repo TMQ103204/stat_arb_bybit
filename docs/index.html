@@ -320,6 +320,43 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
         </div>
       </div>
 
+      <!-- ────── Cointegrated Pairs Table ────── -->
+      <div class="card full-width">
+        <div class="card-header">
+          <span class="card-title"
+            ><span class="icon">📊</span> Cointegrated Pairs
+            <span style="font-size: 12px; color: var(--cyan); font-weight: 400"
+              >(<span id="pairs-count">0</span> pairs)</span
+            ></span
+          >
+          <div class="card-actions">
+            <button class="btn btn-outline btn-sm" onclick="loadPairs()">
+              ↻ Refresh
+            </button>
+          </div>
+        </div>
+        <div class="card-body" style="padding: 0">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th onclick="sortPairs('sym_1')">Symbol 1</th>
+                  <th onclick="sortPairs('sym_2')">Symbol 2</th>
+                  <th onclick="sortPairs('p_value')">P-Value</th>
+                  <th onclick="sortPairs('t_value')">T-Value</th>
+                  <th onclick="sortPairs('c_value')">C-Value</th>
+                  <th onclick="sortPairs('hedge_ratio')">Hedge Ratio</th>
+                  <th onclick="sortPairs('zero_crossings')">Zero Cross</th>
+                  <th>Z-Score</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="pairs-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <!-- ────── Execution Config ────── -->
       <div class="card full-width" id="exec-config-card">
         <div class="card-header">
@@ -391,84 +428,28 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
                 <input
                   type="checkbox"
                   id="e-autotrade"
-                  checked
                   style="display: none"
                 />
                 <div
-                  class="toggle active"
+                  class="toggle"
                   onclick="
-                    this.classList.toggle('active');
-                    document.getElementById('e-autotrade').checked =
-                      this.classList.contains('active');
+                    let isActive = this.classList.toggle('active');
+                    document.getElementById('e-autotrade').checked = isActive;
+                    document.getElementById('e-autotrade-label').innerText = isActive ? 'Enabled' : 'Disabled';
                   "
                 ></div>
                 <span
+                  id="e-autotrade-label"
                   style="font-size: 12px; color: var(--text-secondary)"
-                  >Enabled</span
+                  >Disabled</span
                 >
               </div>
             </div>
-            <div class="form-group">
-              <label>Timeframe (min)</label>
-              <input type="number" id="e-timeframe" value="60" />
-            </div>
-            <div class="form-group">
-              <label>Kline Limit</label>
-              <input type="number" id="e-kline" value="200" />
-            </div>
-            <div class="form-group">
-              <label>Z-Score Window</label>
-              <input type="number" id="e-zscore-win" value="21" />
-            </div>
-            <div class="form-group" title="Use Market order when |z-score| reaches this level (set to 99 to disable)">
-              <label>Market Order Z ⚡</label>
-              <input type="number" id="e-market-zscore" value="2.0" step="0.1" />
-            </div>
-            <div class="form-group" title="Minimum expected net profit % after fees required to allow market order">
-              <label>Min Profit % 💰</label>
-              <input type="number" id="e-min-profit" value="0.5" step="0.1" />
-            </div>
-            <div class="form-group" title="Bybit taker fee per side (%) — used in profit calculation">
-              <label>Taker Fee %</label>
-              <input type="number" id="e-taker-fee" value="0.055" step="0.005" />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ────── Cointegrated Pairs Table ────── -->
-      <div class="card full-width">
-        <div class="card-header">
-          <span class="card-title"
-            ><span class="icon">📊</span> Cointegrated Pairs
-            <span style="font-size: 12px; color: var(--cyan); font-weight: 400"
-              >(<span id="pairs-count">0</span> pairs)</span
-            ></span
-          >
-          <div class="card-actions">
-            <button class="btn btn-outline btn-sm" onclick="loadPairs()">
-              ↻ Refresh
-            </button>
-          </div>
-        </div>
-        <div class="card-body" style="padding: 0">
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th onclick="sortPairs('sym_1')">Symbol 1</th>
-                  <th onclick="sortPairs('sym_2')">Symbol 2</th>
-                  <th onclick="sortPairs('p_value')">P-Value</th>
-                  <th onclick="sortPairs('t_value')">T-Value</th>
-                  <th onclick="sortPairs('c_value')">C-Value</th>
-                  <th onclick="sortPairs('hedge_ratio')">Hedge Ratio</th>
-                  <th onclick="sortPairs('zero_crossings')">Zero Cross</th>
-                  <th>Z-Score</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="pairs-tbody"></tbody>
-            </table>
+            <!-- timeframe / kline_limit / z_score_window are internal constants, not exposed in UI -->
+            <!-- Market Order Z, Min Profit %, Taker Fee % hidden (features disabled) -->
+            <input type="hidden" id="e-market-zscore" value="99" />
+            <input type="hidden" id="e-min-profit" value="0" />
+            <input type="hidden" id="e-taker-fee" value="0.055" />
           </div>
         </div>
       </div>

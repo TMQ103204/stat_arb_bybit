@@ -5,27 +5,46 @@ import time
 
 logger = get_logger("position")
 
-# Check for open positions (updated for Bybit V5 API)
+# Check for open positions (updated for Bybit V5 API & API Error Handling)
 def open_position_confirmation(ticker, max_retries=3):
     for attempt in range(max_retries):
         try:
             position = retry_api_call(session_private.get_positions, category="linear", symbol=ticker)
-            if get_ret_code(position) == 0:
+            ret_code = get_ret_code(position)
+
+            # API trả về thành công (0) → kết quả đáng tin cậy
+            if ret_code == 0:
                 for item in get_result_list(position):
                     if float(item["size"]) > 0:
                         return True
-            return False  # API call succeeded but no open size — position is not open
+                return False  # API call succeeded but no open size — position is not open
+
+            # API trả về lỗi (rate limit, UTA sync...) → PHẢI retry, KHÔNG được return False
+            else:
+                logger.warning(
+                    "API Error checking open position for %s (retCode: %s). Retrying %d/%d...",
+                    ticker, ret_code, attempt + 1, max_retries
+                )
+                time.sleep(2)
+                continue
+
         except Exception as e:
             logger.error(
                 "Network error checking open position for %s (attempt %d/%d): %s",
                 ticker, attempt + 1, max_retries, e
             )
             time.sleep(2)
-    # All retries exhausted — assume position is NOT open to avoid phantom locks
+
+    # All retries exhausted — CRITICAL: we genuinely don't know the position state.
+    # Return False to avoid phantom locks, but log a critical warning.
+    logger.critical(
+        "POSITION CHECK EXHAUSTED for %s after %d retries — returning False (uncertain state).",
+        ticker, max_retries
+    )
     return False
 
 
-# Check for active positions (updated for Bybit V5 API)
+# Check for active positions (updated for Bybit V5 API & API Error Handling)
 def active_position_confirmation(ticker, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -34,17 +53,35 @@ def active_position_confirmation(ticker, max_retries=3):
                 category="linear",
                 symbol=ticker
             )
-            if get_ret_code(active_order) == 0:
+            ret_code = get_ret_code(active_order)
+
+            # API trả về thành công (0)
+            if ret_code == 0:
                 if len(get_result_list(active_order)) > 0:
                     return True
-            return False  # API call succeeded but no open orders
+                return False  # API call succeeded but no open orders
+
+            # API trả về lỗi → PHẢI retry
+            else:
+                logger.warning(
+                    "API Error checking active orders for %s (retCode: %s). Retrying %d/%d...",
+                    ticker, ret_code, attempt + 1, max_retries
+                )
+                time.sleep(2)
+                continue
+
         except Exception as e:
             logger.error(
                 "Network error checking active orders for %s (attempt %d/%d): %s",
                 ticker, attempt + 1, max_retries, e
             )
             time.sleep(2)
+
     # All retries exhausted — assume no active orders
+    logger.critical(
+        "ACTIVE ORDER CHECK EXHAUSTED for %s after %d retries — returning False (uncertain state).",
+        ticker, max_retries
+    )
     return False
 
 

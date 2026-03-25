@@ -120,8 +120,8 @@ def parse_execution_config():
     config["signal_negative_ticker"] = m.group(1) if m else "ticker_1"
     m = re.search(r'^limit_order_basis\s*=\s*(True|False)', content, re.MULTILINE)
     config["limit_order_basis"] = m.group(1) == "True" if m else True
-    m = re.search(r'^auto_trade\s*=\s*(True|False)', content, re.MULTILINE)
-    config["auto_trade"] = m.group(1) == "True" if m else True
+    m = re.search(r'^auto_trade\s*=\s*(True|False)', content, re.MULTILINE | re.IGNORECASE)
+    config["auto_trade"] = m.group(1).capitalize() == "True" if m else False
     m = re.search(r'^tradeable_capital_usdt\s*=\s*([\d.]+)', content, re.MULTILINE)
     config["tradeable_capital_usdt"] = float(m.group(1)) if m else 10000
     m = re.search(r'^stop_loss_fail_safe\s*=\s*([\d.]+)', content, re.MULTILINE)
@@ -149,6 +149,16 @@ def parse_execution_config():
 def write_execution_config(config):
     """Rewrite config_execution_api.py with updated values."""
     content = EXECUTION_CONFIG.read_text(encoding="utf-8")
+    # Fallback: if timeframe/kline_limit/z_score_window not supplied (removed from UI),
+    # preserve the current values from the file.
+    for key, pattern, default in [
+        ("timeframe", r'^timeframe\s*=\s*(\d+)', 60),
+        ("kline_limit", r'^kline_limit\s*=\s*(\d+)', 200),
+        ("z_score_window", r'^z_score_window\s*=\s*(\d+)', 21),
+    ]:
+        if key not in config:
+            m = re.search(pattern, content, re.MULTILINE)
+            config[key] = int(m.group(1)) if m else default
     content = re.sub(r'^mode\s*=\s*["\'](\w+)["\']', f'mode = "{config["mode"]}"', content, flags=re.MULTILINE)
     content = re.sub(r'^ticker_1\s*=\s*["\'][^"\']+["\']', f'ticker_1 = "{config["ticker_1"]}"', content, flags=re.MULTILINE)
     content = re.sub(r'^ticker_2\s*=\s*["\'][^"\']+["\']', f'ticker_2 = "{config["ticker_2"]}"', content, flags=re.MULTILINE)

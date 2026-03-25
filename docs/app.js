@@ -192,14 +192,14 @@ async function loadExecutionConfig() {
     const limitToggle = document.getElementById("e-limit").nextElementSibling;
     if (limitToggle) limitToggle.classList.toggle("active", cfg.limit_order_basis);
 
-    const autoTrade = cfg.auto_trade !== false;
+    const autoTrade = cfg.auto_trade === true;
     document.getElementById("e-autotrade").checked = autoTrade;
     const autoToggle = document.getElementById("e-autotrade").nextElementSibling;
     if (autoToggle) autoToggle.classList.toggle("active", autoTrade);
+    const autoLabel = document.getElementById("e-autotrade-label");
+    if (autoLabel) autoLabel.innerText = autoTrade ? "Enabled" : "Disabled";
 
-    document.getElementById("e-timeframe").value = cfg.timeframe;
-    document.getElementById("e-kline").value = cfg.kline_limit;
-    document.getElementById("e-zscore-win").value = cfg.z_score_window;
+
     document.getElementById("e-market-zscore").value = cfg.market_order_zscore_thresh ?? 2.0;
     document.getElementById("e-min-profit").value = cfg.min_profit_pct ?? 0.5;
     document.getElementById("e-taker-fee").value = cfg.taker_fee_pct ?? 0.055;
@@ -225,9 +225,7 @@ async function saveExecutionConfig() {
     zscore_stop_loss: parseFloat(document.getElementById("e-zstop").value),
     limit_order_basis: document.getElementById("e-limit").checked,
     auto_trade: document.getElementById("e-autotrade").checked,
-    timeframe: parseInt(document.getElementById("e-timeframe").value),
-    kline_limit: parseInt(document.getElementById("e-kline").value),
-    z_score_window: parseInt(document.getElementById("e-zscore-win").value),
+
     market_order_zscore_thresh: parseFloat(document.getElementById("e-market-zscore").value),
     min_profit_pct: parseFloat(document.getElementById("e-min-profit").value),
     taker_fee_pct: parseFloat(document.getElementById("e-taker-fee").value),
