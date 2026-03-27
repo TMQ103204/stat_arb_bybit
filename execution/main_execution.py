@@ -20,7 +20,7 @@ from func_position_calls import active_position_confirmation
 from func_trade_management import manage_new_trades
 from func_execution_calls import set_leverage
 from func_close_positions import close_all_positions
-from func_get_zscore import get_latest_zscore
+from func_get_zscore import get_latest_zscore, get_latest_zscore_with_hedge
 from func_save_status import save_status
 from func_calcultions import calculate_exact_live_profit
 from logger_setup import get_logger
@@ -58,6 +58,7 @@ if __name__ == "__main__":
     signal_side = ""
     kill_switch = 0
     position_open_time = 0.0
+    entry_hedge_ratio = None  # frozen hedge_ratio at trade entry
     session_realized_loss = 0.0  # cumulative realized loss (USDT) this session — for circuit breaker
     last_close_pnl = 0.0  # net PnL of the last tick before close — used by circuit breaker
     save_status(status_dict)
@@ -123,21 +124,24 @@ if __name__ == "__main__":
             if is_manage_new_trades and kill_switch == 0:
                 status_dict["message"] = "Managing new trades..."
                 save_status(status_dict)
-                kill_switch, signal_side = manage_new_trades(kill_switch)
+                kill_switch, signal_side, entry_hedge_ratio = manage_new_trades(kill_switch)
                 if kill_switch == 1:
                     position_open_time = time.time()
+                    logger.info("Trade entered with frozen hedge_ratio=%.6f", entry_hedge_ratio if entry_hedge_ratio else 0)
 
             # If BOTH legs are open but kill_switch is 0 (e.g., bot restarted), re-attach to HOLDING
             if both_legs_open and kill_switch == 0:
                 kill_switch = 1
                 position_open_time = time.time()
-                # Determine signal_side from current z-score for re-attach
-                if not signal_side:
-                    reattach_result = get_latest_zscore()
+                # Determine signal_side and freeze hedge_ratio for re-attach
+                if not signal_side or entry_hedge_ratio is None:
+                    reattach_result = get_latest_zscore_with_hedge()
                     if reattach_result is not None:
-                        reattach_zscore = float(cast(float, reattach_result[0]))
+                        reattach_zscore, _, entry_hedge_ratio = reattach_result
+                        reattach_zscore = float(cast(float, reattach_zscore))
                         signal_side = "positive" if reattach_zscore > 0 else "negative"
-                        logger.info("Re-attached (both legs): signal_side=%s (z-score=%.4f)", signal_side, reattach_zscore)
+                        logger.info("Re-attached (both legs): signal_side=%s (z-score=%.4f) hedge_ratio=%.6f",
+                                    signal_side, reattach_zscore, entry_hedge_ratio)
                     else:
                         signal_side = "positive"  # fallback
                         logger.warning("Re-attached with fallback signal_side=positive")
@@ -147,17 +151,20 @@ if __name__ == "__main__":
             # Manage open position: stop-losses & take-profit
             if kill_switch == 1:
 
-                # Get and save the latest z-score
-                result = get_latest_zscore()
+                # Get and save the latest z-score using frozen hedge_ratio
+                result = get_latest_zscore_with_hedge(entry_hedge_ratio)
                 if result is not None:
-                    zscore, signal_sign_positive = result
+                    zscore, signal_sign_positive, _ = result
                     zscore = float(cast(float, zscore))
                 else:
                     continue
 
                 from config_execution_api import (
-                    zscore_stop_loss, time_stop_loss_hours
+                    zscore_stop_loss, time_stop_loss_hours, custom_thresholds, exit_threshold
                 )
+
+                # Determine actual exit target
+                target_exit = float(exit_threshold) if custom_thresholds else 0.0
 
                 # Determine long/short tickers from the logged signal side
                 long_ticker  = signal_positive_ticker if signal_side == "positive" else signal_negative_ticker
@@ -197,12 +204,12 @@ if __name__ == "__main__":
                     logger.critical("TIME STOP LOSS REACHED: position open for > %s hours.", time_stop_loss_hours)
                     kill_switch = 2
 
-                # 3. Mean-reversion take-profit: Z-score crossed zero
-                elif signal_side == "positive" and zscore < 0:
-                    logger.info("TAKE PROFIT: Z-score crossed below 0 (was positive side)")
+                # 3. Mean-reversion or target take-profit
+                elif signal_side == "positive" and zscore < target_exit:
+                    logger.info("TAKE PROFIT: Z-score crossed below exit target %.4f", target_exit)
                     kill_switch = 2
-                elif signal_side == "negative" and zscore >= 0:
-                    logger.info("TAKE PROFIT: Z-score crossed above 0 (was negative side)")
+                elif signal_side == "negative" and zscore >= -target_exit:
+                    logger.info("TAKE PROFIT: Z-score crossed above exit target %.4f", -target_exit)
                     kill_switch = 2
 
                 # NOTE: Do not reset kill_switch to 0 based on is_manage_new_trades here.
@@ -248,6 +255,7 @@ if __name__ == "__main__":
                     save_status(status_dict)
                     sys.exit(1)
                 last_close_pnl = 0.0  # reset for next trade
+                entry_hedge_ratio = None  # reset frozen hedge_ratio for next trade
                 # ──────────────────────────────────────────────────────────────────
 
                 # Sleep after closing — let market settle before seeking new signal.

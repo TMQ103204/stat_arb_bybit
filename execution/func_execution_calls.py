@@ -38,14 +38,17 @@ def should_use_market(z_score: float) -> bool:
 # Set leverage (updated for Bybit V5 Unified Trading Account)
 # NOTE: switch_margin_mode is NOT supported on UTA accounts — margin mode
 # is managed at the account level, not per-symbol. Only set_leverage is needed.
-def set_leverage(ticker):
+def set_leverage(ticker, lev=None):
+    from config_execution_api import leverage as cfg_leverage
+    lev_str = str(int(lev if lev is not None else cfg_leverage))
     try:
         session_private.set_leverage(
             category="linear",
             symbol=ticker,
-            buyLeverage="1",
-            sellLeverage="1"
+            buyLeverage=lev_str,
+            sellLeverage=lev_str
         )
+        logger.info("set_leverage %s → %sx", ticker, lev_str)
     except Exception as e:
         logger.debug("set_leverage for %s: %s", ticker, e)
 

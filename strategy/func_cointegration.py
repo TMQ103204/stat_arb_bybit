@@ -4,6 +4,7 @@ import statsmodels.api as sm
 import pandas as pd
 import numpy as np
 import math
+import re
 
 
 # Calculate Z-Score
@@ -200,6 +201,20 @@ def extract_close_prices(prices):
 # Calculate cointegrated pairs (enhanced with advanced filtering & ranking)
 def get_cointegrated_pairs(prices):
 
+    # ── Duplicate-asset detection ────────────────────────────────────────
+    # Extracts base asset from symbol to detect pairs like BTCUSDT vs BTC-0626USDT
+    # or 1000PEPEUSDT vs PEPEUSDT which are the same underlying, not a real pair.
+    def _extract_base_asset(symbol):
+        s = symbol.upper()
+        for suffix in ("USDT", "PERP", "USD"):
+            if s.endswith(suffix):
+                s = s[:-len(suffix)]
+        s = re.sub(r'[-]?\d{2}[A-Z]{3}\d{2,4}$', '', s)  # -26JUN25
+        s = re.sub(r'[-]?\d{4,}$', '', s)                  # -0626, 0926
+        if s.startswith("1000") and len(s) > 4:
+            s = s[4:]
+        return s
+
     # Loop through coins and check for co-integration
     coint_pair_list = []
     included_set = set()
@@ -207,6 +222,7 @@ def get_cointegrated_pairs(prices):
     total_pairs = len(symbols) * (len(symbols) - 1) // 2
     checked = 0
     basic_pass = 0
+    duplicate_asset_rejected = 0
 
     print(f"Scanning {total_pairs} pairs from {len(symbols)} symbols...")
 
@@ -222,6 +238,14 @@ def get_cointegrated_pairs(prices):
             checked += 1
             if checked % 500 == 0:
                 print(f"  Progress: {checked}/{total_pairs} checked, {basic_pass} passed basic test...")
+
+            # ── Duplicate-asset filter ─────────────────────────────────
+            base_1 = _extract_base_asset(sym_1)
+            base_2 = _extract_base_asset(sym_2)
+            if base_1 == base_2:
+                duplicate_asset_rejected += 1
+                continue
+            # ──────────────────────────────────────────────────────────
 
             # Get close prices
             series_1 = extract_close_prices(prices[sym_1])
@@ -257,69 +281,80 @@ def get_cointegrated_pairs(prices):
                 "total_trades": total_trades
             })
 
-    print(f"Done: {checked} pairs checked, {basic_pass} passed basic test, {len(coint_pair_list)} total candidates.")
+    print(f"Done: {checked} pairs checked, {basic_pass} passed basic, "
+          f"{duplicate_asset_rejected} duplicate-asset rejected, "
+          f"{len(coint_pair_list)} total candidates.")
 
     # Output results
     df_coint = pd.DataFrame(coint_pair_list)
     if not df_coint.empty:
         total_before = len(df_coint)
 
-        # Bước 1: Lọc bỏ các cặp có hedge_ratio phi thực tế
-        df_coint = df_coint[(df_coint['hedge_ratio'] >= 0.01) & (df_coint['hedge_ratio'] <= 100)]
-        print(f"  Filter hedge_ratio: {total_before} -> {len(df_coint)}")
+        # ── HARD FILTERS (reject high-risk pairs) ────────────────────
 
-        # Bước 2: Lọc nâng cao (with diagnostics)
+        # 1. Hedge ratio phi thuc te (too extreme = unbalanced position)
+        df_coint = df_coint[(df_coint['hedge_ratio'] >= 0.2) & (df_coint['hedge_ratio'] <= 5.0)]
+        print(f"  Filter hedge_ratio [0.2-5.0]: {total_before} -> {len(df_coint)}")
+
+        # 2. Half-life: qua ngan = noise, qua dai = ket von
         before = len(df_coint)
         df_coint = df_coint[(df_coint['half_life'] >= 1) & (df_coint['half_life'] <= 80)]
         print(f"  Filter half_life [1-80]: {before} -> {len(df_coint)}")
 
-        # Hurst: dùng như soft ranking, không phải hard filter
-        # (R/S Hurst bị bias cao trên chuỗi ngắn 200 nến, gần như luôn >= 0.5)
-        print(f"  Hurst: kept as soft ranking (not hard filter)")
-
+        # 3. Win rate: cap phai thang > 50% trong backtest
         before = len(df_coint)
-        df_coint = df_coint[df_coint['win_rate'] >= 0.4]
-        print(f"  Filter win_rate >= 0.4: {before} -> {len(df_coint)}")
+        df_coint = df_coint[df_coint['win_rate'] >= 0.5]
+        print(f"  Filter win_rate >= 0.5: {before} -> {len(df_coint)}")
 
+        # 4. Enough trades: it nhat 2 trade trong backtest
         before = len(df_coint)
-        df_coint = df_coint[df_coint['total_trades'] >= 1]
-        print(f"  Filter total_trades >= 1: {before} -> {len(df_coint)}")
+        df_coint = df_coint[df_coint['total_trades'] >= 2]
+        print(f"  Filter total_trades >= 2: {before} -> {len(df_coint)}")
+
+        # 5. Rolling stability: cointegration on dinh o CA 2 nua du lieu
+        before = len(df_coint)
+        df_coint = df_coint[df_coint['is_stable'] == True]
+        print(f"  Filter is_stable = True: {before} -> {len(df_coint)}")
 
         if df_coint.empty:
             print("[WARNING] No pairs survived the advanced filters.")
             df_coint.to_csv("2_cointegrated_pairs.csv", index=False)
             return df_coint
 
-        # Bước 3: Tính Composite Score mới
-        # is_stable được dùng như bonus trong ranking, không phải hard filter
-        df_coint['rank_hl'] = df_coint['half_life'].rank(ascending=True)
-        df_coint['rank_hurst'] = df_coint['hurst'].rank(ascending=True)
-        df_coint['rank_wr'] = df_coint['win_rate'].rank(ascending=False)
-        df_coint['rank_zero'] = df_coint['zero_crossings'].rank(ascending=False)
-        df_coint['rank_t_val'] = df_coint['t_value'].rank(ascending=True)
-        # Stable pairs get a bonus (rank 1 = best); unstable pairs get penalized
-        df_coint['rank_stable'] = df_coint['is_stable'].map({True: 1, False: 2}).rank(ascending=True)
+        # ── COMPOSITE SCORE (Safety-First Ranking) ───────────────────
+        # Lower score = safer pair = higher on the list
+        #
+        # win_rate   30% — historical success rate is the strongest signal
+        # half_life  25% — faster reversion = less risk exposure
+        # hurst      20% — lower H = more mean-reverting (H<0.5 ideal)
+        # p_value    15% — stronger cointegration evidence
+        # total_trades 10% — more backtest samples = more confidence
+
+        df_coint['rank_wr']     = df_coint['win_rate'].rank(ascending=False)
+        df_coint['rank_hl']     = df_coint['half_life'].rank(ascending=True)
+        df_coint['rank_hurst']  = df_coint['hurst'].rank(ascending=True)
+        df_coint['rank_pval']   = df_coint['p_value'].rank(ascending=True)
+        df_coint['rank_trades'] = df_coint['total_trades'].rank(ascending=False)
 
         df_coint['composite_score'] = (
-            df_coint['rank_wr']      * 0.25 +
-            df_coint['rank_hl']      * 0.20 +
-            df_coint['rank_hurst']   * 0.20 +
-            df_coint['rank_stable']  * 0.15 +
-            df_coint['rank_zero']    * 0.10 +
-            df_coint['rank_t_val']   * 0.10
+            df_coint['rank_wr']     * 0.30 +
+            df_coint['rank_hl']     * 0.25 +
+            df_coint['rank_hurst']  * 0.20 +
+            df_coint['rank_pval']   * 0.15 +
+            df_coint['rank_trades'] * 0.10
         )
 
-        # Bước 4: Sắp xếp theo composite score
+        # Score thap nhat = cap an toan nhat o tren cung
         df_coint = df_coint.sort_values("composite_score", ascending=True)
 
-        # Xóa cột tạm
+        # Xoa cot tam
         df_coint = df_coint.drop(columns=[
-            'rank_hl', 'rank_hurst', 'rank_wr', 'rank_zero', 'rank_t_val',
-            'rank_stable', 'is_stable'
+            'rank_wr', 'rank_hl', 'rank_hurst', 'rank_pval',
+            'rank_trades', 'is_stable'
         ])
 
-        # Lưu file
+        # Luu file
         df_coint.to_csv("2_cointegrated_pairs.csv", index=False)
-        print(f"[OK] {len(df_coint)} pairs survived advanced filtering.")
+        print(f"[OK] {len(df_coint)} pairs survived — top pairs are safest.")
     return df_coint
 

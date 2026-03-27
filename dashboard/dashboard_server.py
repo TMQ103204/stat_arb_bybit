@@ -130,6 +130,10 @@ def parse_execution_config():
     config["signal_trigger_thresh"] = float(m.group(1)) if m else 1.1
     m = re.search(r'^zscore_stop_loss\s*=\s*([\d.]+)', content, re.MULTILINE)
     config["zscore_stop_loss"] = float(m.group(1)) if m else 3.0
+    m = re.search(r'^custom_thresholds\s*=\s*(True|False)', content, re.MULTILINE)
+    config["custom_thresholds"] = m.group(1) == "True" if m else False
+    m = re.search(r'^exit_threshold\s*=\s*([\d.]+)', content, re.MULTILINE)
+    config["exit_threshold"] = float(m.group(1)) if m else 0.0
     m = re.search(r'^timeframe\s*=\s*(\d+)', content, re.MULTILINE)
     config["timeframe"] = int(m.group(1)) if m else 60
     m = re.search(r'^kline_limit\s*=\s*(\d+)', content, re.MULTILINE)
@@ -143,6 +147,8 @@ def parse_execution_config():
     config["min_profit_pct"] = float(m.group(1)) if m else 0.5
     m = re.search(r'^taker_fee_pct\s*=\s*([\d.]+)', content, re.MULTILINE)
     config["taker_fee_pct"] = float(m.group(1)) if m else 0.055
+    m = re.search(r'^leverage\s*=\s*(\d+)', content, re.MULTILINE)
+    config["leverage"] = int(m.group(1)) if m else 1
     return config
 
 
@@ -179,6 +185,23 @@ def write_execution_config(config):
                      f'signal_trigger_thresh = {config["signal_trigger_thresh"]}', content, flags=re.MULTILINE)
     content = re.sub(r'^zscore_stop_loss\s*=\s*[\d.]+',
                      f'zscore_stop_loss = {config["zscore_stop_loss"]}', content, flags=re.MULTILINE)
+    # custom_thresholds & exit_threshold
+    if "custom_thresholds" in config:
+        val = config["custom_thresholds"]
+        if isinstance(val, str):
+            val = val.capitalize() == "True"
+        if re.search(r'^custom_thresholds\s*=\s*(True|False)', content, re.MULTILINE):
+            content = re.sub(r'^custom_thresholds\s*=\s*(True|False)',
+                             f'custom_thresholds = {val}', content, flags=re.MULTILINE)
+        else:
+            content = content.rstrip() + f'\ncustom_thresholds = {val}\n'
+    if "exit_threshold" in config:
+        et = float(config["exit_threshold"])
+        if re.search(r'^exit_threshold\s*=\s*[\d.]+', content, re.MULTILINE):
+            content = re.sub(r'^exit_threshold\s*=\s*[\d.]+',
+                             f'exit_threshold = {et}', content, flags=re.MULTILINE)
+        else:
+            content = content.rstrip() + f'\nexit_threshold = {et}\n'
     content = re.sub(r'^timeframe\s*=\s*\d+', f'timeframe = {config["timeframe"]}', content, flags=re.MULTILINE)
     content = re.sub(r'^kline_limit\s*=\s*\d+', f'kline_limit = {config["kline_limit"]}', content, flags=re.MULTILINE)
     content = re.sub(r'^z_score_window\s*=\s*\d+', f'z_score_window = {config["z_score_window"]}', content, flags=re.MULTILINE)
@@ -191,6 +214,13 @@ def write_execution_config(config):
     if "taker_fee_pct" in config:
         content = re.sub(r'^taker_fee_pct\s*=\s*[\d.]+',
                          f'taker_fee_pct = {config["taker_fee_pct"]}', content, flags=re.MULTILINE)
+    if "leverage" in config:
+        lev = max(1, min(50, int(config["leverage"])))
+        if re.search(r'^leverage\s*=\s*\d+', content, re.MULTILINE):
+            content = re.sub(r'^leverage\s*=\s*\d+',
+                             f'leverage = {lev}', content, flags=re.MULTILINE)
+        else:
+            content = content.rstrip() + f'\nleverage = {lev}\n'
     EXECUTION_CONFIG.write_text(content, encoding="utf-8")
 
 
@@ -406,6 +436,63 @@ def reset_execution():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/execution/test-leverage", methods=["POST"])
+def test_leverage():
+    """Test setting leverage on Bybit for the configured pair.
+    Reads leverage + tickers from config and calls set_leverage API."""
+    try:
+        cfg = parse_execution_config()
+        mode = cfg.get("mode", "demo")
+        ticker_1 = cfg.get("ticker_1", "")
+        ticker_2 = cfg.get("ticker_2", "")
+        lev = max(1, min(50, int(cfg.get("leverage", 1))))
+
+        if not ticker_1 or not ticker_2:
+            return jsonify({"error": "No tickers configured"}), 400
+
+        from dotenv import load_dotenv as _ld
+        _ld(str(BASE_DIR / ".env"))
+
+        if mode == "test":
+            ak, sk = os.getenv("API_KEY_TESTNET", ""), os.getenv("API_SECRET_TESTNET", "")
+        elif mode == "demo":
+            ak, sk = os.getenv("API_KEY_DEMO", ""), os.getenv("API_SECRET_DEMO", "")
+        else:
+            ak, sk = os.getenv("API_KEY_MAINNET", ""), os.getenv("API_SECRET_MAINNET", "")
+
+        if not ak or not sk:
+            return jsonify({"error": f"No API key for mode '{mode}'"}), 400
+
+        from pybit.unified_trading import HTTP as _H
+        if mode == "test":
+            sess = _H(testnet=True, api_key=ak, api_secret=sk)
+        elif mode == "demo":
+            sess = _H(demo=True, api_key=ak, api_secret=sk)
+        else:
+            sess = _H(api_key=ak, api_secret=sk)
+
+        results = []
+        for ticker in [ticker_1, ticker_2]:
+            try:
+                resp = sess.set_leverage(
+                    category="linear", symbol=ticker,
+                    buyLeverage=str(lev), sellLeverage=str(lev)
+                )
+                ret_code = resp.get("retCode", -1)
+                ret_msg = resp.get("retMsg", "")
+                ok = ret_code == 0 or "not modified" in ret_msg.lower()
+                results.append({"symbol": ticker, "success": ok,
+                                "retCode": ret_code, "retMsg": ret_msg})
+            except Exception as e:
+                results.append({"symbol": ticker, "success": False, "error": str(e)})
+
+        all_ok = all(r["success"] for r in results)
+        return jsonify({"status": "ok" if all_ok else "partial_fail",
+                        "leverage": lev, "results": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/execution/status", methods=["GET"])
 def execution_status():
     global execution_process
@@ -475,29 +562,29 @@ def get_backtest_pair():
         sym2 = request.args.get('sym2')
         if not sym1 or not sym2:
             return jsonify({"error": "Missing sym1 or sym2"}), 400
-            
+
         sys.path.insert(0, str(STRATEGY_DIR))
         from func_cointegration import extract_close_prices, calculate_cointegration_basic, calculate_spread, calculate_zscore
-        
+
         if not PRICE_JSON.exists():
             return jsonify({"error": "Price data not found. Run strategy first."}), 400
-            
+
         with open(PRICE_JSON, "r") as f:
             prices = json.load(f)
-            
+
         if sym1 not in prices or sym2 not in prices:
             return jsonify({"error": f"Price data not found for {sym1} or {sym2}"}), 400
-            
+
         prices_1 = extract_close_prices(prices[sym1])
         prices_2 = extract_close_prices(prices[sym2])
-        
+
         basic = calculate_cointegration_basic(prices_1, prices_2)
         if basic is None:
             return jsonify({"error": f"{sym1} vs {sym2} are not cointegrated"}), 400
         hedge_ratio = basic["hedge_ratio"]
         spread = calculate_spread(prices_1, prices_2, hedge_ratio)
         zscore = calculate_zscore(spread)
-        
+
         import math
 
         def safe_float(val):
@@ -507,19 +594,17 @@ def get_backtest_pair():
             except Exception:
                 return None
 
-        # Build response rows
         rows = []
         for i in range(len(prices_1)):
             s_val = spread[i] if hasattr(spread, '__getitem__') else None
             z_val = zscore[i] if hasattr(zscore, '__getitem__') else None
-            
             rows.append({
                 sym1: prices_1[i],
                 sym2: prices_2[i],
                 "Spread": safe_float(s_val),
                 "ZScore": safe_float(z_val)
             })
-            
+
         return jsonify({
             "data": rows,
             "columns": [sym1, sym2, "Spread", "ZScore"]
@@ -531,8 +616,11 @@ def get_backtest_pair():
 @app.route("/api/backtest/pair/live", methods=["GET"])
 def get_backtest_pair_live():
     """Fetch LIVE klines from Bybit and compute spread/zscore for charting.
-    Uses the same timeframe/kline_limit from execution config so the chart
-    always reflects the current trading window up to now."""
+
+    CRITICAL: Always compute OLS hedge_ratio and z-score over the FULL
+    kline_limit window from execution config (same as the bot does).
+    Then trim the output to the requested duration for display.
+    This ensures z-scores are numerically identical to the bot's values."""
     try:
         import math as _math
 
@@ -542,23 +630,32 @@ def get_backtest_pair_live():
             return jsonify({"error": "Missing sym1 or sym2"}), 400
 
         exec_cfg = parse_execution_config()
-        kline_limit = exec_cfg.get("kline_limit", 200)
-        timeframe   = exec_cfg.get("timeframe", 60)
+        tf_param = request.args.get('timeframe', '').strip()
+        if tf_param and tf_param.isdigit() and int(tf_param) in (1, 5, 15, 30, 60):
+            timeframe = int(tf_param)
+        else:
+            timeframe = exec_cfg.get("timeframe", 60)
 
-        # Ensure paths
+        dur_param = request.args.get('duration', '').strip()
+        duration_hours = int(dur_param) if dur_param and dur_param.isdigit() and int(dur_param) > 0 else 48
+        display_limit = int(duration_hours * 60 / timeframe)
+
+        # ALWAYS fetch the full kline_limit from config (same as bot)
+        config_kline_limit = exec_cfg.get("kline_limit", 200)
+        fetch_limit = min(max(config_kline_limit, display_limit), 1000)
+
         for p in (str(STRATEGY_DIR), str(EXECUTION_DIR), str(BASE_DIR)):
             if p not in sys.path:
                 sys.path.insert(0, p)
 
-        from func_cointegration import calculate_spread, calculate_zscore
-
-        hedge_ratio = _get_hedge_ratio(sym1, sym2)
+        import statsmodels.api as sm
+        from func_stats import calculate_spread, calculate_zscore
 
         sess = _get_pub_session()
-        r1 = sess.get_kline(category="linear", symbol=sym1,
-                            interval=str(timeframe), limit=kline_limit)
-        r2 = sess.get_kline(category="linear", symbol=sym2,
-                            interval=str(timeframe), limit=kline_limit)
+        r1 = sess.get_mark_price_kline(category="linear", symbol=sym1,
+                            interval=str(timeframe), limit=fetch_limit)
+        r2 = sess.get_mark_price_kline(category="linear", symbol=sym2,
+                            interval=str(timeframe), limit=fetch_limit)
 
         kl1 = list(reversed(r1.get("result", {}).get("list", [])))
         kl2 = list(reversed(r2.get("result", {}).get("list", [])))
@@ -568,13 +665,14 @@ def get_backtest_pair_live():
         n = min(len(kl1), len(kl2))
         p1 = [float(kl1[i][4]) for i in range(n)]
         p2 = [float(kl2[i][4]) for i in range(n)]
+        ts = [int(kl1[i][0]) for i in range(n)]
 
         if len(p1) < 20:
             return jsonify({"error": "Insufficient data points"}), 400
 
-        if hedge_ratio is None:
-            import numpy as _np
-            hedge_ratio = float(_np.polyfit(p2, p1, 1)[0])
+        # OLS hedge_ratio — computed over FULL window (same as bot)
+        model = sm.OLS(p1, p2).fit()
+        hedge_ratio = float(model.params[0])
 
         spread  = calculate_spread(p1, p2, hedge_ratio)
         zscores = list(calculate_zscore(spread))
@@ -586,18 +684,26 @@ def get_backtest_pair_live():
             except Exception:
                 return None
 
-        rows = []
+        from datetime import datetime, timezone, timedelta
+        ict = timezone(timedelta(hours=7))
+
+        full_rows = []
         for i in range(len(p1)):
-            rows.append({
+            dt = datetime.fromtimestamp(ts[i] / 1000, tz=ict)
+            full_rows.append({
                 sym1: p1[i],
                 sym2: p2[i],
                 "Spread": safe(spread[i]) if hasattr(spread, '__getitem__') else None,
                 "ZScore": safe(zscores[i]) if i < len(zscores) else None,
+                "Time": dt.strftime("%m/%d %H:%M"),
             })
+
+        # Trim to requested display duration
+        rows = full_rows[-display_limit:] if len(full_rows) > display_limit else full_rows
 
         return jsonify({
             "data": rows,
-            "columns": [sym1, sym2, "Spread", "ZScore"],
+            "columns": [sym1, sym2, "Spread", "ZScore", "Time"],
         })
     except Exception as e:
         import traceback
@@ -650,29 +756,35 @@ def _get_hedge_ratio(sym1, sym2):
     return None
 
 
-def _compute_pair_zscores(sym1, sym2, kline_limit=200, timeframe_override=None):
+def _compute_pair_zscores(sym1, sym2, kline_limit=None, timeframe_override=None):
     """
     Fetch klines for sym1/sym2 and return (zscore_list, timestamps_ms_list,
-    hedge_ratio) or raise on error. zscore_list and timestamps_ms_list are
-    aligned (same length), oldest-first.
+    hedge_ratio) or raise on error.
+
+    IMPORTANT: Uses execution/func_stats (same as the bot) for Z-score
+    calculation to ensure consistency across the entire system.
+    kline_limit defaults to config_execution_api.kline_limit (same as bot).
     """
     import math as _math
+    import statsmodels.api as sm
 
-    # Ensure strategy dir is on sys.path for func_cointegration
-    for p in (str(STRATEGY_DIR), str(EXECUTION_DIR), str(BASE_DIR)):
+    # Ensure execution dir is on sys.path for func_stats
+    for p in (str(EXECUTION_DIR), str(BASE_DIR)):
         if p not in sys.path:
             sys.path.insert(0, p)
 
-    from func_cointegration import calculate_spread, calculate_zscore
+    from func_stats import calculate_spread, calculate_zscore
 
-    hedge_ratio = _get_hedge_ratio(sym1, sym2)
     exec_cfg    = parse_execution_config()
     timeframe   = timeframe_override or exec_cfg.get("timeframe", 60)
+    # Use config kline_limit if not explicitly provided (same as bot)
+    if kline_limit is None:
+        kline_limit = exec_cfg.get("kline_limit", 200)
 
     sess = _get_pub_session()
-    r1 = sess.get_kline(category="linear", symbol=sym1,
+    r1 = sess.get_mark_price_kline(category="linear", symbol=sym1,
                         interval=str(timeframe), limit=kline_limit)
-    r2 = sess.get_kline(category="linear", symbol=sym2,
+    r2 = sess.get_mark_price_kline(category="linear", symbol=sym2,
                         interval=str(timeframe), limit=kline_limit)
 
     kl1 = r1.get("result", {}).get("list", [])
@@ -695,9 +807,9 @@ def _compute_pair_zscores(sym1, sym2, kline_limit=200, timeframe_override=None):
 
     p1, p2, ts = p1[-n2:], p2[-n2:], ts[-n2:]
 
-    if hedge_ratio is None:
-        import numpy as _np
-        hedge_ratio = float(_np.polyfit(p2, p1, 1)[0])
+    # Always compute OLS hedge_ratio dynamically (same as bot's func_stats.calculate_metrics)
+    model = sm.OLS(p1, p2).fit()
+    hedge_ratio = float(model.params[0])
 
     spread  = calculate_spread(p1, p2, hedge_ratio)
     zscores = list(calculate_zscore(spread))
@@ -751,8 +863,8 @@ def get_pair_zscore_history():
         import math as _math
         from datetime import datetime, timezone, timedelta
 
-        # Use 5-min klines for granular history (200 × 5min ≈ 16 hours)
-        zscores, timestamps, _ = _compute_pair_zscores(sym1, sym2, kline_limit=200, timeframe_override=5)
+        # Use execution config timeframe + kline_limit (same as bot)
+        zscores, timestamps, _ = _compute_pair_zscores(sym1, sym2)
 
         # Build output array; skip NaN entries (z-score window warm-up)
         ict = timezone(timedelta(hours=7))

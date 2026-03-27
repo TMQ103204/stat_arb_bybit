@@ -108,6 +108,20 @@
       .zhist-val  { font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:600; min-width:58px; text-align:right; }
       .zscore-loading { padding:24px; text-align:center; color:var(--text-muted); font-size:13px; }
       .zscore-err     { color:#f87171 !important; }
+
+      /* ── Timeframe selector buttons ─────────────────────────── */
+      .chart-tf-btn {
+        background:none; border:none; color:var(--text-muted);
+        font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:600;
+        padding:4px 10px; border-radius:6px; cursor:pointer;
+        transition:background .15s, color .15s;
+        letter-spacing:.3px;
+      }
+      .chart-tf-btn:hover { background:rgba(255,255,255,.06); color:var(--text-primary); }
+      .chart-tf-btn.active {
+        background:var(--brand); color:#fff;
+        box-shadow:0 1px 4px rgba(34,211,238,.3);
+      }
     </style>
   </head>
   <body>
@@ -251,14 +265,6 @@
           <span class="card-title"
             ><span class="icon">⚙️</span> Strategy Config</span
           >
-          <div class="card-actions">
-            <button
-              class="btn btn-accent btn-sm"
-              onclick="saveStrategyConfig()"
-            >
-              💾 Save
-            </button>
-          </div>
         </div>
         <div class="card-body">
           <div class="form-grid">
@@ -363,14 +369,6 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
           <span class="card-title"
             ><span class="icon">🎯</span> Execution Config</span
           >
-          <div class="card-actions">
-            <button
-              class="btn btn-accent btn-sm"
-              onclick="saveExecutionConfig()"
-            >
-              💾 Save
-            </button>
-          </div>
         </div>
         <div class="card-body">
           <div class="form-grid" style="grid-template-columns: repeat(4, 1fr)">
@@ -387,7 +385,7 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
               <input type="number" id="e-capital" step="100" value="10000" />
             </div>
             <div class="form-group">
-              <label>Signal Trigger Thresh</label>
+              <label>Entry Threshold</label>
               <input type="number" id="e-trigger" step="0.1" value="1.1" />
             </div>
             <div class="form-group">
@@ -410,9 +408,10 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
                 <div
                   class="toggle active"
                   onclick="
-                    this.classList.toggle('active');
-                    document.getElementById('e-limit').checked =
-                      this.classList.contains('active');
+                    let isActive = this.classList.toggle('active');
+                    document.getElementById('e-limit').checked = isActive;
+                    document.getElementById('e-limit-label').innerText = isActive ? 'Enabled' : 'Disabled';
+                    saveExecutionConfig();
                   "
                 ></div>
                 <span
@@ -436,6 +435,7 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
                     let isActive = this.classList.toggle('active');
                     document.getElementById('e-autotrade').checked = isActive;
                     document.getElementById('e-autotrade-label').innerText = isActive ? 'Enabled' : 'Disabled';
+                    saveExecutionConfig();
                   "
                 ></div>
                 <span
@@ -445,11 +445,84 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
                 >
               </div>
             </div>
+            <div class="form-group" title="Enable to customize Leverage and Exit Threshold">
+              <label>User Custom</label>
+              <div class="toggle-wrap" style="margin-top: 6px">
+                <input
+                  type="checkbox"
+                  id="e-custom-thresholds"
+                  style="display: none"
+                />
+                <div
+                  class="toggle"
+                  onclick="
+                    let isActive = this.classList.toggle('active');
+                    document.getElementById('e-custom-thresholds').checked = isActive;
+                    document.getElementById('e-custom-label').innerText = isActive ? 'Enabled' : 'Disabled';
+                    document.getElementById('e-user-custom-panel').style.display = isActive ? 'block' : 'none';
+                    saveExecutionConfig();
+                  "
+                ></div>
+                <span
+                  id="e-custom-label"
+                  style="font-size: 12px; color: var(--text-secondary)"
+                  >Disabled</span
+                >
+              </div>
+            </div>
+            <div id="e-user-custom-panel" style="display: none; grid-column: 1 / -1">
+              <div class="form-grid" style="grid-template-columns: repeat(3, 1fr); margin-top: 4px">
+                <div class="form-group">
+                  <label>Leverage (x)</label>
+                  <input type="number" id="e-leverage" min="1" max="50" step="1" value="1" />
+                </div>
+                <div class="form-group">
+                  <label>Exit Threshold</label>
+                  <input type="number" id="e-exit-threshold" step="0.1" value="0.0" />
+                </div>
+                <div class="form-group" style="display: flex; align-items: flex-end">
+                  <button class="btn btn-accent btn-sm" onclick="testLeverage()" id="btn-test-leverage"
+                    title="Test setting leverage on Bybit for the current pair">
+                    🧪 Test Leverage
+                  </button>
+                </div>
+              </div>
+            </div>
             <!-- timeframe / kline_limit / z_score_window are internal constants, not exposed in UI -->
             <!-- Market Order Z, Min Profit %, Taker Fee % hidden (features disabled) -->
             <input type="hidden" id="e-market-zscore" value="99" />
             <input type="hidden" id="e-min-profit" value="0" />
             <input type="hidden" id="e-taker-fee" value="0.055" />
+          </div>
+          <!-- ── P&L Estimation Panel ── -->
+          <div id="pnl-estimate-panel" style="
+            margin-top:16px;padding:14px 18px;
+            background:linear-gradient(135deg,rgba(34,211,238,.06) 0%,rgba(16,185,129,.04) 100%);
+            border:1px solid rgba(34,211,238,.15);border-radius:12px;
+            display:none;
+          ">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+              <span style="font-size:13px;font-weight:600;color:var(--text-primary)">📊 P&L Estimate</span>
+              <span id="pnl-est-pair" style="font-size:11px;color:var(--cyan);font-family:'JetBrains Mono',monospace"></span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+              <div>
+                <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">Gross P&L</div>
+                <div id="pnl-est-gross" style="font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--text-primary)">—</div>
+              </div>
+              <div>
+                <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">Total Fees</div>
+                <div id="pnl-est-fees" style="font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f59e0b">—</div>
+              </div>
+              <div>
+                <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">Net P&L</div>
+                <div id="pnl-est-net" style="font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace">—</div>
+              </div>
+              <div>
+                <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">% Return</div>
+                <div id="pnl-est-pct" style="font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace">—</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -460,7 +533,19 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
           <span class="card-title"
             ><span class="icon">📈</span> Backtest Analysis</span
           >
-          <div class="card-actions">
+          <div class="card-actions" style="display:flex;align-items:center;gap:8px">
+            <div class="chart-tf-bar" id="chart-tf-bar" style="display:inline-flex;gap:2px;background:var(--surface-alt);border-radius:8px;padding:2px;">
+              <button class="chart-tf-btn" data-tf="1" onclick="setChartTimeframe(1)">1m</button>
+              <button class="chart-tf-btn" data-tf="5" onclick="setChartTimeframe(5)">5m</button>
+              <button class="chart-tf-btn" data-tf="15" onclick="setChartTimeframe(15)">15m</button>
+              <button class="chart-tf-btn" data-tf="30" onclick="setChartTimeframe(30)">30m</button>
+              <button class="chart-tf-btn active" data-tf="60" onclick="setChartTimeframe(60)">1h</button>
+            </div>
+            <span style="color:var(--border);font-size:16px">│</span>
+            <div style="display:inline-flex;gap:2px;background:var(--surface-alt);border-radius:8px;padding:2px;">
+              <button class="chart-tf-btn chart-dur-btn" data-dur="24" onclick="setChartDuration(24)">24h</button>
+              <button class="chart-tf-btn chart-dur-btn active" data-dur="48" onclick="setChartDuration(48)">48h</button>
+            </div>
             <button class="btn btn-outline btn-sm" onclick="refreshBacktestChart()">
               ↻ Refresh
             </button>

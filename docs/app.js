@@ -12,6 +12,9 @@ let strategyPolling = null;
 let executionPolling = null;
 let backtestChart = null;
 let connectionOk = false;
+let _chartTimeframe = 60;  // selected chart timeframe (minutes)
+let _chartDuration  = 48;  // selected chart duration in hours (24h or 48h)
+let _lastChartData = null; // store for PnL estimation
 
 // ── Selected-pair Z-Score state ─────────────────────────────────────
 let _selectedPair      = null;  // {sym1, sym2}
@@ -191,6 +194,8 @@ async function loadExecutionConfig() {
     document.getElementById("e-limit").checked = cfg.limit_order_basis;
     const limitToggle = document.getElementById("e-limit").nextElementSibling;
     if (limitToggle) limitToggle.classList.toggle("active", cfg.limit_order_basis);
+    const limitLabel = document.getElementById("e-limit-label");
+    if (limitLabel) limitLabel.innerText = cfg.limit_order_basis ? "Enabled" : "Disabled";
 
     const autoTrade = cfg.auto_trade === true;
     document.getElementById("e-autotrade").checked = autoTrade;
@@ -199,10 +204,23 @@ async function loadExecutionConfig() {
     const autoLabel = document.getElementById("e-autotrade-label");
     if (autoLabel) autoLabel.innerText = autoTrade ? "Enabled" : "Disabled";
 
+    // Custom thresholds
+    const isCustom = cfg.custom_thresholds === true;
+    document.getElementById("e-custom-thresholds").checked = isCustom;
+    const customToggle = document.getElementById("e-custom-thresholds").nextElementSibling;
+    if (customToggle) customToggle.classList.toggle("active", isCustom);
+    const customLabel = document.getElementById("e-custom-label");
+    if (customLabel) customLabel.innerText = isCustom ? "Enabled" : "Disabled";
+    document.getElementById("e-user-custom-panel").style.display = isCustom ? "block" : "none";
+    document.getElementById("e-exit-threshold").value = cfg.exit_threshold ?? 0.0;
+    document.getElementById("e-leverage").value = cfg.leverage ?? 1;
 
     document.getElementById("e-market-zscore").value = cfg.market_order_zscore_thresh ?? 2.0;
     document.getElementById("e-min-profit").value = cfg.min_profit_pct ?? 0.5;
     document.getElementById("e-taker-fee").value = cfg.taker_fee_pct ?? 0.055;
+    
+    // Initial P&L estimation
+    estimatePnL();
   } catch (e) {
     /* offline */
   }
@@ -225,6 +243,9 @@ async function saveExecutionConfig() {
     zscore_stop_loss: parseFloat(document.getElementById("e-zstop").value),
     limit_order_basis: document.getElementById("e-limit").checked,
     auto_trade: document.getElementById("e-autotrade").checked,
+    custom_thresholds: document.getElementById("e-custom-thresholds").checked,
+    exit_threshold: parseFloat(document.getElementById("e-exit-threshold").value) || 0.0,
+    leverage: parseInt(document.getElementById("e-leverage").value) || 1,
 
     market_order_zscore_thresh: parseFloat(document.getElementById("e-market-zscore").value),
     min_profit_pct: parseFloat(document.getElementById("e-min-profit").value),
@@ -244,6 +265,31 @@ async function saveExecutionConfig() {
     }
   } catch (e) {
     toast("Cannot connect to local server", "error");
+  }
+}
+
+async function testLeverage() {
+  const btn = document.getElementById("btn-test-leverage");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Testing...';
+  try {
+    // Save config first so the leverage value is up to date
+    await saveExecutionConfig();
+    const res = await api("/api/execution/test-leverage", { method: "POST" });
+    if (res.error) {
+      toast("❌ Leverage test failed: " + res.error, "error");
+    } else if (res.status === "ok") {
+      toast(`✅ Leverage ${res.leverage}x set successfully on Bybit!`, "success");
+    } else {
+      const failed = (res.results || []).filter(r => !r.success);
+      const msgs = failed.map(r => `${r.symbol}: ${r.error || r.retMsg}`).join(", ");
+      toast(`⚠️ Partial fail: ${msgs}`, "error");
+    }
+  } catch (e) {
+    toast("Cannot connect to local server", "error");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "🧪 Test Leverage";
   }
 }
 
@@ -539,11 +585,29 @@ function sortPairs(col) {
 }
 
 
+function setChartTimeframe(tf) {
+  _chartTimeframe = tf;
+  // Update active button style
+  document.querySelectorAll(".chart-tf-btn").forEach((b) =>
+    b.classList.toggle("active", parseInt(b.dataset.tf) === tf)
+  );
+  // Re-fetch chart with new timeframe
+  refreshBacktestChart();
+}
+
+function setChartDuration(hours) {
+  _chartDuration = hours;
+  document.querySelectorAll(".chart-dur-btn").forEach((b) =>
+    b.classList.toggle("active", parseInt(b.dataset.dur) === hours)
+  );
+  refreshBacktestChart();
+}
+
 async function fetchDynamicBacktest(sym1, sym2) {
   toast(`Loading live chart for ${sym1} / ${sym2}...`, "info");
   try {
-    // Try live endpoint first (fetches fresh klines from Bybit)
-    let res = await api(`/api/backtest/pair/live?sym1=${sym1}&sym2=${sym2}`);
+    // Try live endpoint first (fetches fresh klines from Bybit) with selected timeframe + duration
+    let res = await api(`/api/backtest/pair/live?sym1=${sym1}&sym2=${sym2}&timeframe=${_chartTimeframe}&duration=${_chartDuration}`);
     // Fallback to cached endpoint if live fails
     if (res.error) {
       res = await api(`/api/backtest/pair?sym1=${sym1}&sym2=${sym2}`);
@@ -594,7 +658,9 @@ function refreshBacktestChart() {
 
 
 function renderBacktestChart(data, cols) {
-  const labels = data.map((_, i) => i);
+  // Use timestamps from API if available, fall back to index
+  const timeLabels = data.map((r) => r["Time"] || "");
+  const labels = timeLabels.some(t => t) ? timeLabels : data.map((_, i) => i);
   const symCols = cols.filter(
     (c) => c !== "Spread" && c !== "ZScore" && c !== "Date" && c !== "Time",
   );
@@ -609,6 +675,9 @@ function renderBacktestChart(data, cols) {
     const sym2 = symCols[1];
     const p1 = data.map((r) => parseFloat(r[sym1]) || 0);
     const p2 = data.map((r) => parseFloat(r[sym2]) || 0);
+
+    // Save for PnL estimation
+    _lastChartData = { sym1, sym2, p1, p2, spreadData };
 
     // Normalize prices to z-scores for visual comparison (so they start at same scale)
     const mean1 = p1.reduce((a, b) => a + b, 0) / p1.length;
@@ -674,7 +743,16 @@ function renderBacktestChart(data, cols) {
           },
         },
         scales: {
-          x: { display: false },
+          x: {
+            display: true,
+            ticks: {
+              color: "#64748b",
+              font: { family: "JetBrains Mono", size: 9 },
+              maxTicksLimit: 8,
+              maxRotation: 0,
+            },
+            grid: { display: false },
+          },
           y: {
             grid: { color: "rgba(255,255,255,0.05)" },
             ticks: {
@@ -688,60 +766,70 @@ function renderBacktestChart(data, cols) {
   }
   // --- End Price Chart ---
 
+  // Read current threshold values from the Execution Config form
+  const entryThresh = parseFloat(document.getElementById("e-trigger").value) || 1.1;
+  const isCustom = document.getElementById("e-custom-thresholds").checked;
+  const exitThresh = isCustom ? (parseFloat(document.getElementById("e-exit-threshold").value) || 0) : 0;
+
+  // Build z-score chart datasets
+  const zscoreDatasets = [
+    {
+      label: "Z-Score",
+      data: zscoreData,
+      borderColor: "#06b6d4",
+      borderWidth: 2,
+      pointRadius: 0,
+      tension: 0.1,
+    },
+    {
+      label: "Mean (0)",
+      data: data.map(() => 0),
+      borderColor: "rgba(255,255,255,0.3)",
+      borderWidth: 1,
+      pointRadius: 0,
+      borderDash: [5, 5],
+    },
+    {
+      label: `Entry (+${entryThresh})`,
+      data: data.map(() => entryThresh),
+      borderColor: "rgba(239,68,68,0.8)",
+      borderWidth: 1.5,
+      pointRadius: 0,
+      borderDash: [6, 3],
+    },
+    {
+      label: `Entry (-${entryThresh})`,
+      data: data.map(() => -entryThresh),
+      borderColor: "rgba(239,68,68,0.8)",
+      borderWidth: 1.5,
+      pointRadius: 0,
+      borderDash: [6, 3],
+    },
+    {
+      label: `Exit (+${exitThresh})`,
+      data: data.map(() => exitThresh),
+      borderColor: "rgba(16,185,129,0.8)",
+      borderWidth: 1.5,
+      pointRadius: 0,
+      borderDash: [3, 4],
+    },
+    {
+      label: `Exit (-${exitThresh})`,
+      data: data.map(() => -exitThresh),
+      borderColor: "rgba(16,185,129,0.8)",
+      borderWidth: 1.5,
+      pointRadius: 0,
+      borderDash: [3, 4],
+    },
+  ];
+
   if (backtestChart) backtestChart.destroy();
   const ctx = document.getElementById("backtest-canvas").getContext("2d");
   backtestChart = new Chart(ctx, {
     type: "line",
     data: {
       labels,
-      datasets: [
-        {
-          label: "Spread",
-          data: spreadData,
-          borderColor: "#6366f1",
-          backgroundColor: "rgba(99,102,241,0.1)",
-          borderWidth: 1.5,
-          pointRadius: 0,
-          fill: true,
-          yAxisID: "y",
-        },
-        {
-          label: "Z-Score",
-          data: zscoreData,
-          borderColor: "#06b6d4",
-          borderWidth: 2,
-          pointRadius: 0,
-          yAxisID: "y1",
-          tension: 0.1,
-        },
-        {
-          label: "Mean (0)",
-          data: data.map(() => 0),
-          borderColor: "rgba(255,255,255,0.3)",
-          borderWidth: 1,
-          pointRadius: 0,
-          borderDash: [5, 5],
-          yAxisID: "y1",
-        },
-        {
-          label: "Upper Band (+2)",
-          data: data.map(() => 2),
-          borderColor: "rgba(239,68,68,0.7)",
-          borderWidth: 1,
-          pointRadius: 0,
-          borderDash: [3, 4],
-          yAxisID: "y1",
-        },
-        {
-          label: "Lower Band (-2)",
-          data: data.map(() => -2),
-          borderColor: "rgba(16,185,129,0.7)",
-          borderWidth: 1,
-          pointRadius: 0,
-          borderDash: [3, 4],
-          yAxisID: "y1",
-        },
-      ],
+      datasets: zscoreDatasets,
     },
     options: {
       responsive: true,
@@ -751,20 +839,35 @@ function renderBacktestChart(data, cols) {
         legend: {
           labels: { color: "#94a3b8", font: { family: "Inter", size: 11 } },
         },
+        title: {
+          display: true,
+          text: "Z-Score",
+          color: "#f8fafc",
+          font: { family: "Outfit", size: 14 },
+        },
+        tooltip: {
+          callbacks: {
+            title: function(items) {
+              if (!items.length) return '';
+              const idx = items[0].dataIndex;
+              return timeLabels[idx] || `Point ${idx}`;
+            }
+          }
+        },
       },
       scales: {
-        x: { display: false },
-        y: {
-          position: "left",
-          grid: { color: "rgba(99,102,241,0.08)" },
+        x: {
+          display: true,
           ticks: {
             color: "#64748b",
-            font: { family: "JetBrains Mono", size: 10 },
+            font: { family: "JetBrains Mono", size: 9 },
+            maxTicksLimit: 8,
+            maxRotation: 0,
           },
+          grid: { display: false },
         },
-        y1: {
-          position: "right",
-          grid: { drawOnChartArea: false },
+        y: {
+          grid: { color: "rgba(6,182,212,0.08)" },
           ticks: {
             color: "#06b6d4",
             font: { family: "JetBrains Mono", size: 10 },
@@ -774,13 +877,104 @@ function renderBacktestChart(data, cols) {
     },
   });
 
-  const lastZ = zscoreData.filter((v) => v !== null);
   if (symCols.length >= 2) {
     document.getElementById("metric-sym1").textContent = symCols[0];
     document.getElementById("metric-sym2").textContent = symCols[1];
   }
   document.getElementById("metric-datapoints").textContent = data.length;
+
+  estimatePnL();
 }
+
+// ── P&L Estimation ──────────────────────────────────────────────────
+function estimatePnL() {
+  const panel = document.getElementById("pnl-estimate-panel");
+  if (!panel) return;
+  
+  if (!_lastChartData) {
+    panel.style.display = "none";
+    return;
+  }
+  
+  const capital = parseFloat(document.getElementById("e-capital").value) || 0;
+  const entryZ = parseFloat(document.getElementById("e-trigger").value) || 0;
+  const isCustom = document.getElementById("e-custom-thresholds").checked;
+  const exitZ = isCustom ? (parseFloat(document.getElementById("e-exit-threshold").value) || 0) : 0;
+  const takerFeePct = parseFloat(document.getElementById("e-taker-fee").value) || 0.055;
+  const leverage = isCustom ? (parseFloat(document.getElementById("e-leverage").value) || 1) : 1;
+
+  if (capital <= 0 || entryZ <= 0) {
+    panel.style.display = "none";
+    return;
+  }
+
+  const { p1, p2, spreadData, sym1, sym2 } = _lastChartData;
+  if (!p1 || !p2 || !spreadData || p1.length === 0 || spreadData.length === 0) return;
+
+  // Calculate spread standard deviation
+  const meanSpread = spreadData.reduce((a, b) => a + b, 0) / spreadData.length;
+  const varSpread = spreadData.reduce((sq, n) => sq + Math.pow(n - meanSpread, 2), 0) / (spreadData.length - 1);
+  const stdSpread = Math.sqrt(varSpread);
+
+  // Average prices for both legs
+  const avgP1 = p1.reduce((a, b) => a + b, 0) / p1.length;
+  const avgP2 = p2.reduce((a, b) => a + b, 0) / p2.length;
+
+  // Stat-arb P&L estimation:
+  // - Capital is split 50/50 across two legs
+  // - Each leg's notional = (capital / 2) * leverage
+  // - When z-score moves from entryZ to exitZ, spread moves by zDelta * stdSpread
+  // - P&L on leg1 ≈ notional_leg1 * (spread_dollar_move / avgP1)
+  // - This is an approximation; real P&L depends on actual price movements
+  // - Total fees = 4 legs (open+close × 2 symbols) × notional × fee%
+  
+  const zDelta = Math.abs(entryZ - exitZ);
+  const notionalPerLeg = (capital / 2) * leverage;
+  const spreadDollarMove = zDelta * stdSpread;
+  
+  // Gross P&L: spread movement relative to reference price × notional
+  const grossPnL = notionalPerLeg * (spreadDollarMove / avgP1);
+  
+  // Fees: 4 order fills (open leg1, open leg2, close leg1, close leg2)
+  const totalFees = 4 * notionalPerLeg * (takerFeePct / 100);
+  const netPnL = grossPnL - totalFees;
+  const returnPct = (netPnL / capital) * 100;
+
+  document.getElementById("pnl-est-pair").textContent = `${sym1} / ${sym2}`;
+  document.getElementById("pnl-est-gross").textContent = `$${grossPnL.toFixed(3)}`;
+  document.getElementById("pnl-est-fees").textContent = `$${totalFees.toFixed(3)}`;
+  
+  const netEl = document.getElementById("pnl-est-net");
+  const pctEl = document.getElementById("pnl-est-pct");
+  
+  netEl.textContent = `$${netPnL.toFixed(3)}`;
+  const leverageLabel = leverage > 1 ? ` (${leverage}x)` : '';
+  pctEl.textContent = `${returnPct > 0 ? '+' : ''}${returnPct.toFixed(2)}%${leverageLabel}`;
+  
+  const color = netPnL >= 0 ? "var(--green)" : "var(--red)";
+  netEl.style.color = color;
+  pctEl.style.color = color;
+  
+  if (netPnL < 0) {
+    panel.style.background = "linear-gradient(135deg, rgba(239,68,68,.06) 0%, rgba(220,38,38,.04) 100%)";
+    panel.style.borderColor = "rgba(239,68,68,.2)";
+  } else {
+    panel.style.background = "linear-gradient(135deg,rgba(34,211,238,.06) 0%,rgba(16,185,129,.04) 100%)";
+    panel.style.borderColor = "rgba(34,211,238,.15)";
+  }
+  
+  panel.style.display = "block";
+}
+
+// Attach auto-save listeners to config inputs on blur/change
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("#strategy-config-card input").forEach(el => {
+    el.addEventListener(el.type === 'checkbox' || el.type === 'radio' ? 'change' : 'blur', saveStrategyConfig);
+  });
+  document.querySelectorAll("#exec-config-card input").forEach(el => {
+    el.addEventListener(el.type === 'checkbox' || el.type === 'radio' ? 'change' : 'blur', saveExecutionConfig);
+  });
+});
 
 // ═══════════════════════════════════════════════════════════════════
 // EXECUTION BOT
@@ -1124,9 +1318,9 @@ async function initDashboard() {
     );
   }
   loadStrategyConfig();
-  loadExecutionConfig();
+  await loadExecutionConfig();
   loadPairs();
-  loadBacktest();
+  refreshBacktestChart();
   checkBotStatus();
   loadGitStatus();
   loadBotLogs();

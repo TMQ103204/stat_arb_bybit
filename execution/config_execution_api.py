@@ -18,19 +18,23 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 # mode options: "test" (testnet), "demo" (mainnet demo - real prices, virtual money), "live" (real money)
 mode = "live"
 ticker_1 = "0GUSDT"
-ticker_2 = "NEARUSDT"
+ticker_2 = "ASPUSDT"
 signal_positive_ticker = ticker_2
 signal_negative_ticker = ticker_1
 
 limit_order_basis = True # will ensure positions (except for Close) will be placed on limit basis
-auto_trade = False # If False, bot will gracefully stop instead of seeking new trades after a close
+auto_trade = True # If False, bot will gracefully stop instead of seeking new trades after a close
 
 tradeable_capital_usdt = 12 # total tradeable capital to be split between both pairs
+leverage = 2               # leverage multiplier (1x to 50x) — applied to both legs via set_leverage
 stop_loss_fail_safe = 0.15 # stop loss at market order in case of drastic event
-signal_trigger_thresh = 1.1 # z-score threshold which determines trade (must be above zero)
+signal_trigger_thresh = 2 # z-score threshold which determines trade (must be above zero)
 zscore_stop_loss = 5      # emergency stop-loss: absolute z-score beyond which all positions are closed at market
 time_stop_loss_hours = 48 # maximum time in hours to hold a position before emergency close
 max_session_loss_pct = 3.0 # halt bot entirely if cumulative session loss exceeds this % of tradeable capital
+
+custom_thresholds = True  # If True, use custom exit_threshold; if False, exit at z-score 0 (mean reversion)
+exit_threshold = 0.0       # custom z-score exit threshold (only used when custom_thresholds = True)
 
 # If |z_score| >= market_order_zscore_thresh AND expected net profit >= min_profit_pct
 # the bot will use Market orders instead of aggressive Limit orders.
