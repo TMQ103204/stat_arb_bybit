@@ -615,14 +615,12 @@ def get_backtest_pair():
 
 @app.route("/api/backtest/pair/live", methods=["GET"])
 def get_backtest_pair_live():
-    """Fetch LIVE klines from Bybit and compute spread/zscore for charting.
-
-    CRITICAL: Always compute OLS hedge_ratio and z-score over the FULL
-    kline_limit window from execution config (same as the bot does).
-    Then trim the output to the requested duration for display.
-    This ensures z-scores are numerically identical to the bot's values."""
+    """Fetch LIVE klines from Bybit and compute spread/zscore for charting
+    using ROLLING OLS — each candle gets its own β from a trailing window,
+    making z-score history stable and historically accurate."""
     try:
         import math as _math
+        import pandas as pd
 
         sym1 = request.args.get('sym1', '').strip().upper()
         sym2 = request.args.get('sym2', '').strip().upper()
@@ -640,16 +638,17 @@ def get_backtest_pair_live():
         duration_hours = int(dur_param) if dur_param and dur_param.isdigit() and int(dur_param) > 0 else 48
         display_limit = int(duration_hours * 60 / timeframe)
 
-        # ALWAYS fetch the full kline_limit from config (same as bot)
         config_kline_limit = exec_cfg.get("kline_limit", 200)
-        fetch_limit = min(max(config_kline_limit, display_limit), 1000)
+        z_window = exec_cfg.get("z_score_window", 21)
+
+        # Fetch enough candles: kline_limit for OLS warmup + display candles
+        fetch_limit = min(config_kline_limit + display_limit, 1000)
 
         for p in (str(STRATEGY_DIR), str(EXECUTION_DIR), str(BASE_DIR)):
             if p not in sys.path:
                 sys.path.insert(0, p)
 
         import statsmodels.api as sm
-        from func_stats import calculate_spread, calculate_zscore
 
         sess = _get_pub_session()
         r1 = sess.get_mark_price_kline(category="linear", symbol=sym1,
@@ -667,15 +666,32 @@ def get_backtest_pair_live():
         p2 = [float(kl2[i][4]) for i in range(n)]
         ts = [int(kl1[i][0]) for i in range(n)]
 
-        if len(p1) < 20:
+        if len(p1) < config_kline_limit + z_window:
             return jsonify({"error": "Insufficient data points"}), 400
 
-        # OLS hedge_ratio — computed over FULL window (same as bot)
-        model = sm.OLS(p1, p2).fit()
-        hedge_ratio = float(model.params[0])
+        # ── Rolling OLS: each candle gets its own β ──
+        spreads = []
+        hedge_ratios = []
+        valid_p1 = []
+        valid_p2 = []
+        valid_ts = []
+        for i in range(config_kline_limit, len(p1)):
+            window_p1 = p1[i - config_kline_limit:i]
+            window_p2 = p2[i - config_kline_limit:i]
+            model = sm.OLS(window_p1, window_p2).fit()
+            beta_i = float(model.params[0])
+            spread_i = p1[i] - beta_i * p2[i]
+            spreads.append(spread_i)
+            hedge_ratios.append(beta_i)
+            valid_p1.append(p1[i])
+            valid_p2.append(p2[i])
+            valid_ts.append(ts[i])
 
-        spread  = calculate_spread(p1, p2, hedge_ratio)
-        zscores = list(calculate_zscore(spread))
+        # Z-score from rolling spread
+        spread_series = pd.Series(spreads)
+        mean = spread_series.rolling(window=z_window).mean()
+        std = spread_series.rolling(window=z_window).std()
+        zscores = ((spread_series - mean) / std).tolist()
 
         def safe(val):
             try:
@@ -688,12 +704,12 @@ def get_backtest_pair_live():
         ict = timezone(timedelta(hours=7))
 
         full_rows = []
-        for i in range(len(p1)):
-            dt = datetime.fromtimestamp(ts[i] / 1000, tz=ict)
+        for i in range(len(valid_p1)):
+            dt = datetime.fromtimestamp(valid_ts[i] / 1000, tz=ict)
             full_rows.append({
-                sym1: p1[i],
-                sym2: p2[i],
-                "Spread": safe(spread[i]) if hasattr(spread, '__getitem__') else None,
+                sym1: valid_p1[i],
+                sym2: valid_p2[i],
+                "Spread": safe(spreads[i]),
                 "ZScore": safe(zscores[i]) if i < len(zscores) else None,
                 "Time": dt.strftime("%m/%d %H:%M"),
             })
@@ -759,33 +775,32 @@ def _get_hedge_ratio(sym1, sym2):
 def _compute_pair_zscores(sym1, sym2, kline_limit=None, timeframe_override=None):
     """
     Fetch klines for sym1/sym2 and return (zscore_list, timestamps_ms_list,
-    hedge_ratio) or raise on error.
-
-    IMPORTANT: Uses execution/func_stats (same as the bot) for Z-score
-    calculation to ensure consistency across the entire system.
-    kline_limit defaults to config_execution_api.kline_limit (same as bot).
+    hedge_ratio) using ROLLING OLS — each candle gets its own β from a
+    trailing window, making z-score history stable and historically accurate.
     """
     import math as _math
     import statsmodels.api as sm
+    import pandas as pd
 
     # Ensure execution dir is on sys.path for func_stats
     for p in (str(EXECUTION_DIR), str(BASE_DIR)):
         if p not in sys.path:
             sys.path.insert(0, p)
 
-    from func_stats import calculate_spread, calculate_zscore
-
     exec_cfg    = parse_execution_config()
     timeframe   = timeframe_override or exec_cfg.get("timeframe", 60)
-    # Use config kline_limit if not explicitly provided (same as bot)
+    z_window    = exec_cfg.get("z_score_window", 21)
     if kline_limit is None:
         kline_limit = exec_cfg.get("kline_limit", 200)
 
+    # Fetch 2x candles: kline_limit for OLS warmup + kline_limit for display
+    fetch_limit = min(kline_limit * 2, 1000)
+
     sess = _get_pub_session()
     r1 = sess.get_mark_price_kline(category="linear", symbol=sym1,
-                        interval=str(timeframe), limit=kline_limit)
+                        interval=str(timeframe), limit=fetch_limit)
     r2 = sess.get_mark_price_kline(category="linear", symbol=sym2,
-                        interval=str(timeframe), limit=kline_limit)
+                        interval=str(timeframe), limit=fetch_limit)
 
     kl1 = r1.get("result", {}).get("list", [])
     kl2 = r2.get("result", {}).get("list", [])
@@ -802,19 +817,35 @@ def _compute_pair_zscores(sym1, sym2, kline_limit=None, timeframe_override=None)
     ts = [int(kl1[i][0]) for i in range(min(len(p1), len(p2)))]
 
     n2 = min(len(p1), len(p2))
-    if n2 < 20:
-        raise ValueError("Insufficient data")
+    if n2 < kline_limit + z_window:
+        raise ValueError("Insufficient data for rolling OLS")
 
     p1, p2, ts = p1[-n2:], p2[-n2:], ts[-n2:]
 
-    # Always compute OLS hedge_ratio dynamically (same as bot's func_stats.calculate_metrics)
-    model = sm.OLS(p1, p2).fit()
-    hedge_ratio = float(model.params[0])
+    # ── Rolling OLS: each candle i gets β_i from trailing kline_limit window ──
+    spreads = []
+    hedge_ratios = []
+    valid_ts = []
+    for i in range(kline_limit, n2):
+        window_p1 = p1[i - kline_limit:i]
+        window_p2 = p2[i - kline_limit:i]
+        model = sm.OLS(window_p1, window_p2).fit()
+        beta_i = float(model.params[0])
+        spread_i = p1[i] - beta_i * p2[i]
+        spreads.append(spread_i)
+        hedge_ratios.append(beta_i)
+        valid_ts.append(ts[i])
 
-    spread  = calculate_spread(p1, p2, hedge_ratio)
-    zscores = list(calculate_zscore(spread))
+    # Z-score from rolling spread using pandas rolling mean/std
+    spread_series = pd.Series(spreads)
+    mean = spread_series.rolling(window=z_window).mean()
+    std = spread_series.rolling(window=z_window).std()
+    zscores = ((spread_series - mean) / std).tolist()
 
-    return zscores, ts, hedge_ratio
+    # Latest hedge_ratio (for reference)
+    latest_hr = hedge_ratios[-1] if hedge_ratios else 0.0
+
+    return zscores, valid_ts, latest_hr
 
 
 @app.route("/api/pairs/zscore", methods=["GET"])
