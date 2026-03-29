@@ -77,9 +77,8 @@ def calculate_metrics_with_hedge(series_1, series_2,
         zscore_list = calculate_zscore(spread)
         # Capture the entry-time mean & std from the latest rolling window
         # so they can be frozen if a trade is opened on this tick.
-        df = pd.DataFrame(spread)
-        entry_mean = float(df.rolling(center=False, window=z_score_window).mean().iloc[-1])
-        entry_std  = float(df.rolling(center=False, window=z_score_window).std().iloc[-1])
+        entry_mean = float(spread.rolling(center=False, window=z_score_window).mean().iloc[-1])
+        entry_std  = float(spread.rolling(center=False, window=z_score_window).std().iloc[-1])
 
     return (zscore_list if isinstance(zscore_list, list) else zscore_list.tolist(),
             float(hedge_ratio),
