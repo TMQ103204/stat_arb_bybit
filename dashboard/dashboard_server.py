@@ -31,7 +31,6 @@ COINTEGRATED_CSV = STRATEGY_DIR / "2_cointegrated_pairs.csv"
 BACKTEST_CSV = STRATEGY_DIR / "3_backtest_file.csv"
 PRICE_JSON = STRATEGY_DIR / "1_price_list.json"
 STATUS_JSON = EXECUTION_DIR / "status.json"
-BOT_LOG = EXECUTION_DIR / "bot.log"
 
 # ── App ──────────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=str(DASHBOARD_DIR))
@@ -937,55 +936,10 @@ def get_backtest():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/logs", methods=["GET"])
-def get_logs():
-    try:
-        if not BOT_LOG.exists():
-            return jsonify({"lines": []})
-        lines = BOT_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
-        return jsonify({"lines": lines[-200:]})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# ROUTES – Git
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@app.route("/api/git/status", methods=["GET"])
-def git_status():
-    try:
-        result = subprocess.run(
-            ["git", "status", "--short"],
-            capture_output=True, text=True, cwd=str(BASE_DIR),
-        )
-        return jsonify({"output": result.stdout, "error": result.stderr})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/git/push", methods=["POST"])
-def git_push():
-    try:
-        msg = (request.json or {}).get("message", "Dashboard update")
-        # Add all
-        subprocess.run(["git", "add", "."], cwd=str(BASE_DIR), capture_output=True)
-        # Commit
-        commit = subprocess.run(
-            ["git", "commit", "-m", msg],
-            capture_output=True, text=True, cwd=str(BASE_DIR),
-        )
-        # Push
-        push = subprocess.run(
-            ["git", "push"],
-            capture_output=True, text=True, cwd=str(BASE_DIR),
-        )
-        return jsonify({
-            "commit_output": commit.stdout + commit.stderr,
-            "push_output": push.stdout + push.stderr,
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

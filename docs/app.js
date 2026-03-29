@@ -15,6 +15,7 @@ let connectionOk = false;
 let _chartTimeframe = 60;  // selected chart timeframe (minutes)
 let _chartDuration  = 48;  // selected chart duration in hours (24h or 48h)
 let _lastChartData = null; // store for PnL estimation
+let _execScrolledUp = false; // user scrolled up in execution terminal
 
 // ── Selected-pair Z-Score state ─────────────────────────────────────
 let _selectedPair      = null;  // {sym1, sym2}
@@ -1059,12 +1060,24 @@ function updateBotUI(running) {
 
 function startExecutionPolling() {
   if (executionPolling) clearInterval(executionPolling);
+
+  // Smart-scroll tracking: only auto-scroll if user is near the bottom
+  const term = document.getElementById("execution-terminal");
+  _execScrolledUp = false;
+  term.onscroll = () => {
+    const atBottom = term.scrollHeight - term.scrollTop - term.clientHeight < 40;
+    _execScrolledUp = !atBottom;
+  };
+
   executionPolling = setInterval(async () => {
     try {
       const s = await api("/api/execution/status");
       const term = document.getElementById("execution-terminal");
       term.innerHTML = s.output.map(colorLine).join("\n");
-      term.scrollTop = term.scrollHeight;
+      // Only auto-scroll if user hasn't scrolled up
+      if (!_execScrolledUp) {
+        term.scrollTop = term.scrollHeight;
+      }
       if (s.status && s.status.message)
         document.getElementById("bot-message").textContent = s.status.message;
       if (!s.running) {
@@ -1085,63 +1098,6 @@ async function checkBotStatus() {
     if (s.running) startExecutionPolling();
     if (s.status && s.status.message)
       document.getElementById("bot-message").textContent = s.status.message;
-  } catch (e) {
-    /* offline */
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// GIT
-// ═══════════════════════════════════════════════════════════════════
-
-async function loadGitStatus() {
-  try {
-    const res = await api("/api/git/status");
-    document.getElementById("git-status-box").textContent =
-      res.output || res.error || "Clean";
-  } catch (e) {
-    document.getElementById("git-status-box").textContent =
-      "Cannot connect to server";
-  }
-}
-
-async function gitPush() {
-  const msg =
-    document.getElementById("git-message").value || "Dashboard update";
-  const btn = document.getElementById("btn-git-push");
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Pushing...';
-  try {
-    const res = await api("/api/git/push", {
-      method: "POST",
-      body: { message: msg },
-    });
-    btn.disabled = false;
-    btn.innerHTML = "⬆ Push to GitHub";
-    if (res.error) return toast(res.error, "error");
-    toast("Pushed to GitHub ✓", "success");
-    document.getElementById("git-status-box").textContent =
-      res.commit_output + "\n" + res.push_output;
-    loadGitStatus();
-  } catch (e) {
-    btn.disabled = false;
-    btn.innerHTML = "⬆ Push to GitHub";
-    toast("Cannot connect", "error");
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// LOGS
-// ═══════════════════════════════════════════════════════════════════
-
-async function loadBotLogs() {
-  try {
-    const res = await api("/api/logs");
-    if (res.lines) {
-      const term = document.getElementById("logs-terminal");
-      term.innerHTML = res.lines.map(colorLine).join("\n");
-      term.scrollTop = term.scrollHeight;
-    }
   } catch (e) {
     /* offline */
   }
@@ -1324,8 +1280,6 @@ async function initDashboard() {
   loadPairs();
   refreshBacktestChart();
   checkBotStatus();
-  loadGitStatus();
-  loadBotLogs();
   loadPerformance(); // uses default PERF_DEFAULT_START_MS
 
   if (perfPolling) clearInterval(perfPolling);
@@ -1336,5 +1290,4 @@ document.addEventListener("DOMContentLoaded", () => {
   updateClock();
   document.getElementById("api-url-input").value = API;
   initDashboard();
-  setInterval(loadBotLogs, 10000);
 });

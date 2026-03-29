@@ -587,7 +587,7 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
       </div>
 
       <!-- ────── Execution Bot Control ────── -->
-      <div class="card">
+      <div class="card full-width">
         <div class="card-header">
           <span class="card-title"
             ><span class="icon">🤖</span> Execution Bot</span
@@ -625,59 +625,8 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
               <span class="metric-value" id="bot-message">Idle</span>
             </div>
           </div>
-          <pre class="terminal" id="execution-terminal">
+          <pre class="terminal" id="execution-terminal" style="max-height: 600px; min-height: 400px">
 Bot is idle. Configure your pair and click Start.</pre
-          >
-        </div>
-      </div>
-
-      <!-- ────── Git & Deploy ────── -->
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title"
-            ><span class="icon">🔀</span> Git & Deploy</span
-          >
-          <div class="card-actions">
-            <button class="btn btn-outline btn-sm" onclick="loadGitStatus()">
-              ↻ Status
-            </button>
-          </div>
-        </div>
-        <div class="card-body">
-          <div class="git-status-box" id="git-status-box">
-            Loading git status...
-          </div>
-          <div class="git-row">
-            <input
-              type="text"
-              id="git-message"
-              placeholder="Commit message..."
-              value="Dashboard update"
-            />
-            <button
-              class="btn btn-accent btn-sm"
-              id="btn-git-push"
-              onclick="gitPush()"
-            >
-              ⬆ Push to GitHub
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- ────── Bot Logs ────── -->
-      <div class="card full-width">
-        <div class="card-header">
-          <span class="card-title"><span class="icon">📋</span> Bot Logs</span>
-          <div class="card-actions">
-            <button class="btn btn-outline btn-sm" onclick="loadBotLogs()">
-              ↻ Refresh
-            </button>
-          </div>
-        </div>
-        <div class="card-body">
-          <pre class="terminal" id="logs-terminal" style="max-height: 300px">
-Loading logs...</pre
           >
         </div>
       </div>
