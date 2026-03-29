@@ -79,11 +79,15 @@ def get_latest_zscore():
     return None
 
 
-# Get latest z-score with optional frozen hedge_ratio
-# Used for HOLDING phase: pass the entry-time hedge_ratio to ensure
-# z-score movements correlate with actual P&L direction.
-# Returns (zscore, signal_sign_positive, hedge_ratio) or None.
-def get_latest_zscore_with_hedge(frozen_hedge_ratio=None):
+# Get latest z-score with optional frozen hedge_ratio and frozen mean/std
+# Used for HOLDING phase: pass the entry-time hedge_ratio, entry_mean,
+# and entry_std to ensure z-score movements correlate with actual P&L.
+# When frozen_mean/frozen_std are provided, z-score is computed as
+# (current_spread - frozen_mean) / frozen_std, preventing phantom decay.
+# Returns (zscore, signal_sign_positive, hedge_ratio, entry_mean, entry_std) or None.
+def get_latest_zscore_with_hedge(frozen_hedge_ratio=None,
+                                 frozen_mean=None,
+                                 frozen_std=None):
 
     # Get latest asset orderbook prices
     try:
@@ -121,16 +125,20 @@ def get_latest_zscore_with_hedge(frozen_hedge_ratio=None):
         series_1.append(mid_price_1)
         series_2.append(mid_price_2)
 
-        # Get z-score using frozen or fresh hedge_ratio
-        zscore_list, hedge_ratio = calculate_metrics_with_hedge(
-            series_1, series_2, frozen_hedge_ratio
+        # Get z-score using frozen or fresh parameters
+        zscore_list, hedge_ratio, entry_mean, entry_std = calculate_metrics_with_hedge(
+            series_1, series_2,
+            frozen_hedge_ratio,
+            frozen_mean,
+            frozen_std,
         )
         if len(zscore_list) == 0:
             return None
         zscore = _to_float(zscore_list[-1])
         signal_sign_positive = zscore > 0
 
-        return (zscore, signal_sign_positive, hedge_ratio)
+        return (zscore, signal_sign_positive, hedge_ratio, entry_mean, entry_std)
 
     return None
+
 

@@ -1066,33 +1066,71 @@ def _fetch_all_executions(session, fetch_start_ms):
     return all_rows, errors
 
 
+def _fetch_transaction_log(session, fetch_start_ms):
+    """Fetch ALL transaction log entries from Bybit starting from fetch_start_ms.
+    This includes TRADE P&L, SETTLEMENT (funding fees), FEE, etc.
+    Returns the TRUE total P&L that matches what Bybit UI shows.
+
+    NOTE: Bybit limits startTime-endTime to ≤ 7 days, so we split into
+    7-day windows and paginate within each window.
+    """
+    import time as _time
+    all_rows = []
+    errors = []
+    SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+    now_ms = int(_time.time() * 1000)
+
+    window_start = fetch_start_ms
+    while window_start < now_ms:
+        window_end = min(window_start + SEVEN_DAYS_MS, now_ms)
+        cursor = ""
+        while True:
+            kwargs = dict(
+                accountType="UNIFIED",
+                category="linear",
+                startTime=window_start,
+                endTime=window_end,
+                limit=50,
+            )
+            if cursor:
+                kwargs["cursor"] = cursor
+            try:
+                resp = session.get_transaction_log(**kwargs)
+            except Exception as exc:
+                errors.append(f"get_transaction_log exception: {exc}")
+                return all_rows, errors
+            ret = resp.get("retCode", -1)
+            if ret != 0:
+                errors.append(f"get_transaction_log retCode={ret} msg={resp.get('retMsg', '')}")
+                return all_rows, errors
+            result = resp.get("result", {})
+            rows = result.get("list", [])
+            all_rows.extend(rows)
+            cursor = result.get("nextPageCursor", "")
+            if not cursor or not rows:
+                break
+        window_start = window_end
+    return all_rows, errors
+
+
 @app.route("/api/performance", methods=["GET"])
 def get_performance():
     """
-    Return real P&L performance since 16:00 20/03/2026 ICT.
-    Automatically uses Demo or Mainnet credentials based on execution config mode.
+    Return real P&L performance using Bybit's Wallet Balance API directly.
+    
+    Key fields from get_wallet_balance:
+      - walletBalance:  current USDT balance (realized only)
+      - unrealisedPnl:  P&L of currently open positions
+      - cumRealisedPnl: cumulative realized P&L since account creation
+      - equity:         walletBalance + unrealisedPnl
+    
+    Starting capital = walletBalance - cumRealisedPnl (= initial deposit)
+    Total P&L = cumRealisedPnl + unrealisedPnl
+    P&L % = total_pnl / starting_capital × 100
+    
+    This matches Bybit UI exactly — no manual calculation needed.
     """
     try:
-        # ── Parse startMs ──────────────────────────────────────────────
-        start_ms_param = request.args.get("startMs")
-        if start_ms_param:
-            try:
-                start_ms = int(start_ms_param)
-            except (ValueError, TypeError):
-                start_ms = PERF_START_MS
-        else:
-            start_ms = PERF_START_MS
-
-        # ── Parse endMs (optional – set by calendar day picker) ────────
-        end_ms_param = request.args.get("endMs")
-        if end_ms_param:
-            try:
-                end_ms = int(end_ms_param)
-            except (ValueError, TypeError):
-                end_ms = None
-        else:
-            end_ms = None
-
         # ── Read execution config ──────────────────────────────────────
         cfg = parse_execution_config()
         mode = cfg.get("mode", "demo")
@@ -1116,70 +1154,109 @@ def get_performance():
 
         session = _make_session(mode, api_key, api_secret)
 
-        # ── Fetch raw data from bot-launch date ───────────────────────
-        all_pnl_rows,  pnl_errors  = _fetch_all_closed_pnl(session, PERF_START_MS)
-        all_exec_rows, exec_errors = _fetch_all_executions(session, PERF_START_MS)
+        # ══════════════════════════════════════════════════════════════
+        # 1. WALLET BALANCE — the single source of truth
+        # ══════════════════════════════════════════════════════════════
+        wallet_resp = session.get_wallet_balance(accountType="UNIFIED")
+        wallet_result = wallet_resp.get("result", {})
+        accounts = wallet_result.get("list", [])
 
-        # ── Apply user time filter ────────────────────────────────────
-        # If endMs is provided (specific day selected): exact window [start, end]
-        # Otherwise (preset button): from startMs to now
-        if end_ms is not None:
-            closed_pnl_rows = [
-                r for r in all_pnl_rows
-                if start_ms <= int(r.get("updatedTime", 0)) <= end_ms
-            ]
-            exec_rows = [
-                r for r in all_exec_rows
-                if start_ms <= int(r.get("execTime", 0)) <= end_ms
-            ]
-        else:
-            closed_pnl_rows = [
-                r for r in all_pnl_rows
-                if int(r.get("updatedTime", 0)) >= start_ms
-            ]
-            exec_rows = [
-                r for r in all_exec_rows
-                if int(r.get("execTime", 0)) >= start_ms
-            ]
+        wallet_balance = 0.0
+        unrealised_pnl = 0.0
+        cum_realised_pnl = 0.0
+        equity = 0.0
 
-        # ── Aggregate ─────────────────────────────────────────────────
-        from collections import defaultdict
+        if accounts:
+            acc = accounts[0]
+            equity = float(acc.get("totalEquity", 0))
+            # Find USDT coin for detailed breakdown
+            for coin in acc.get("coin", []):
+                if coin.get("coin") == "USDT":
+                    wallet_balance   = float(coin.get("walletBalance", 0))
+                    unrealised_pnl   = float(coin.get("unrealisedPnl", 0))
+                    cum_realised_pnl = float(coin.get("cumRealisedPnl", 0))
+                    break
 
-        total_pnl = sum(float(r.get("closedPnl", 0)) for r in closed_pnl_rows)
+        # Starting capital = what you deposited = current balance minus all P&L
+        starting_capital = wallet_balance - cum_realised_pnl
+        # Total P&L = realized + unrealized
+        total_pnl = cum_realised_pnl + unrealised_pnl
+        # P&L percentage based on what you actually deposited
+        pnl_pct = (total_pnl / starting_capital * 100) if starting_capital > 0 else 0.0
 
-        # ── % Efficiency: total_pnl / max_pair_capital × 100 ──────────
-        # Pair capital = sum of cumEntryValue for all legs that closed at the
-        # same timestamp (same pair round). We take the MAX across all rounds
-        # so the denominator reflects the largest capital commitment used.
-        groups: dict = {}
-        for row in closed_pnl_rows:
-            # Group at second-level precision so both legs of one pair round
-            # (which may differ by a few ms) collapse into the same group.
-            group_key = int(row.get("updatedTime", "0")) // 1000
-            groups.setdefault(group_key, []).append(row)
+        # ══════════════════════════════════════════════════════════════
+        # 2. TRANSACTION LOG — for funding/fee breakdown (informational)
+        # ══════════════════════════════════════════════════════════════
+        # Parse time filters
+        start_ms_param = request.args.get("startMs")
+        start_ms = int(start_ms_param) if start_ms_param else PERF_START_MS
+        end_ms_param = request.args.get("endMs")
+        end_ms = int(end_ms_param) if end_ms_param else None
 
-        pair_capitals = []
-        for rows_in_group in groups.values():
-            cap = sum(float(r.get("cumEntryValue", 0)) for r in rows_in_group)
-            pair_capitals.append(cap)
+        funding_total = 0.0
+        fee_total = 0.0
+        trade_pnl = 0.0
+        try:
+            all_txn_rows, _ = _fetch_transaction_log(session, PERF_START_MS)
+            # Apply time filter
+            if end_ms is not None:
+                txn_rows = [r for r in all_txn_rows
+                            if start_ms <= int(r.get("transactionTime", 0)) <= end_ms]
+            else:
+                txn_rows = [r for r in all_txn_rows
+                            if int(r.get("transactionTime", 0)) >= start_ms]
+            for row in txn_rows:
+                txn_type = row.get("type", "")
+                if txn_type == "TRADE":
+                    trade_pnl += float(row.get("cashFlow", 0))
+                    fee_total -= float(row.get("fee", 0))
+                elif txn_type == "SETTLEMENT":
+                    funding_total += float(row.get("funding", 0))
+        except Exception:
+            pass  # Non-fatal: breakdown is informational only
 
-        max_capital = max(pair_capitals) if pair_capitals else 0.0
-        pair_count  = len(groups)       # unique pair rounds, not individual orders
-        pnl_pct     = (total_pnl / max_capital * 100) if max_capital > 0 else 0.0
+        # ══════════════════════════════════════════════════════════════
+        # 3. CLOSED PNL — for pair count
+        # ══════════════════════════════════════════════════════════════
+        pair_count = 0
+        try:
+            all_pnl_rows, _ = _fetch_all_closed_pnl(session, PERF_START_MS)
+            if end_ms is not None:
+                closed_pnl_rows = [r for r in all_pnl_rows
+                                   if start_ms <= int(r.get("updatedTime", 0)) <= end_ms]
+            else:
+                closed_pnl_rows = [r for r in all_pnl_rows
+                                   if int(r.get("updatedTime", 0)) >= start_ms]
+            groups: dict = {}
+            for row in closed_pnl_rows:
+                group_key = int(row.get("updatedTime", "0")) // 1000
+                groups.setdefault(group_key, []).append(row)
+            pair_count = len(groups)
+        except Exception:
+            pass  # Non-fatal
 
-        resp_data = {
-            "mode":         mode,
-            "total_pnl":    round(total_pnl, 4),
-            "max_capital":  round(max_capital, 4),
-            "pnl_pct":      round(pnl_pct, 4),
-            "pair_count":   pair_count,
-            "filter_ms":    start_ms,
-        }
-        # Include API errors in response (for debugging, non-fatal)
-        if pnl_errors:
-            resp_data["api_warnings"] = pnl_errors
-
-        return jsonify(resp_data)
+        # ══════════════════════════════════════════════════════════════
+        # 4. RESPONSE
+        # ══════════════════════════════════════════════════════════════
+        return jsonify({
+            "mode":              mode,
+            "source":            "wallet_balance_api",
+            # Headline numbers (from wallet API — always accurate)
+            "total_pnl":         round(total_pnl, 4),
+            "pnl_pct":           round(pnl_pct, 4),
+            "starting_capital":  round(starting_capital, 4),
+            "current_equity":    round(equity, 4),
+            "wallet_balance":    round(wallet_balance, 4),
+            "unrealised_pnl":    round(unrealised_pnl, 4),
+            "cum_realised_pnl":  round(cum_realised_pnl, 4),
+            # Breakdown (from transaction log — informational)
+            "trade_pnl":         round(trade_pnl, 4),
+            "funding_fees":      round(funding_total, 4),
+            "trading_fees":      round(fee_total, 4),
+            # Pair count (from closedPnl)
+            "pair_count":        pair_count,
+            "filter_ms":         start_ms,
+        })
 
     except Exception as e:
         import traceback

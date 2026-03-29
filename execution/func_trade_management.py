@@ -2,7 +2,7 @@ from config_execution_api import signal_positive_ticker
 from config_execution_api import signal_negative_ticker
 from config_execution_api import signal_trigger_thresh
 from config_execution_api import zscore_stop_loss
-from config_execution_api import tradeable_capital_usdt
+from func_calcultions import get_wallet_equity
 from config_execution_api import limit_order_basis
 from config_execution_api import session_private
 from func_price_calls import get_ticker_trade_liquidity
@@ -42,14 +42,17 @@ def manage_new_trades(kill_switch):
     signal_side = ""
     hot = False
     entry_hedge_ratio = None
+    entry_mean = None
+    entry_std = None
 
-    # Get and save the latest z-score (with hedge_ratio for freezing)
+    # Get and save the latest z-score (with hedge_ratio, mean, std for freezing)
     latest = get_latest_zscore_with_hedge()
     if latest is None:
-        return kill_switch, signal_side, entry_hedge_ratio
-    zscore, signal_sign_positive, entry_hedge_ratio = latest
+        return kill_switch, signal_side, entry_hedge_ratio, entry_mean, entry_std
+    zscore, signal_sign_positive, entry_hedge_ratio, entry_mean, entry_std = latest
     zscore = _to_float(zscore)
-    logger.info("Entry hedge_ratio frozen at: %.6f", entry_hedge_ratio)
+    logger.info("Entry frozen: hedge_ratio=%.6f  mean=%.8f  std=%.8f",
+                entry_hedge_ratio, entry_mean, entry_std)
 
     # ── Stop-loss zone guard ──────────────────────────────────────────────────
     # If Z-score is at or above the stop-loss threshold, do NOT open new trades.
@@ -60,7 +63,7 @@ def manage_new_trades(kill_switch):
             "Skipping new trade entry to prevent re-entry loop.",
             zscore, float(zscore_stop_loss)
         )
-        return kill_switch, signal_side, entry_hedge_ratio
+        return kill_switch, signal_side, entry_hedge_ratio, entry_mean, entry_std
     # ──────────────────────────────────────────────────────────────────────────
 
     # Switch to hot if meets signal threshold
@@ -97,9 +100,22 @@ def manage_new_trades(kill_switch):
             last_price_long = last_price_n
             last_price_short = last_price_p
 
-        # Fill targets
-        capital_long = tradeable_capital_usdt * 0.5
-        capital_short = tradeable_capital_usdt - capital_long
+        # Fill targets — use min(user config cap, real wallet balance)
+        # User sets tradeable_capital_usdt in config/dashboard as their desired cap.
+        # We never exceed the actual wallet balance to avoid rejected orders.
+        from config_execution_api import tradeable_capital_usdt
+        wallet_info = get_wallet_equity()
+        if wallet_info:
+            wallet_balance = wallet_info["wallet_balance"]
+            available_capital = min(float(tradeable_capital_usdt), wallet_balance)
+            logger.info("Capital: config cap=$%.2f | wallet=$%.4f | using=$%.4f",
+                        float(tradeable_capital_usdt), wallet_balance, available_capital)
+        else:
+            # Fallback: use config if wallet API fails
+            available_capital = float(tradeable_capital_usdt)
+            logger.warning("Wallet API failed, using config capital: $%.2f", available_capital)
+        capital_long = available_capital * 0.5
+        capital_short = available_capital - capital_long
         initial_fill_target_long_usdt = avg_liquidity_long * last_price_long
         initial_fill_target_short_usdt = avg_liquidity_short * last_price_short
         initial_capital_injection_usdt = min(initial_fill_target_long_usdt, initial_fill_target_short_usdt)
@@ -156,7 +172,7 @@ def manage_new_trades(kill_switch):
                         time.sleep(3)
                         close_all_positions(kill_switch)
                         kill_switch = 2  # signal main loop to handle auto_trade + circuit breaker
-                        return kill_switch, signal_side, entry_hedge_ratio
+                        return kill_switch, signal_side, entry_hedge_ratio, entry_mean, entry_std
                     counts_long = 1 if order_long_id else 0
                     if counts_long == 1 and not is_retry_long:
                         remaining_capital_long -= initial_capital_usdt
@@ -173,7 +189,7 @@ def manage_new_trades(kill_switch):
                         time.sleep(3)
                         close_all_positions(kill_switch)
                         kill_switch = 2  # signal main loop to handle auto_trade + circuit breaker
-                        return kill_switch, signal_side, entry_hedge_ratio
+                        return kill_switch, signal_side, entry_hedge_ratio, entry_mean, entry_std
                     counts_short = 1 if order_short_id else 0
                     if counts_short == 1 and not is_retry_short:
                         remaining_capital_short -= initial_capital_usdt
@@ -210,14 +226,14 @@ def manage_new_trades(kill_switch):
             time.sleep(0.5)
 
             # Check limit orders and ensure z_score is still within range
-            # Use frozen hedge_ratio so z-score is consistent with entry
-            latest_new = get_latest_zscore_with_hedge(entry_hedge_ratio)
+            # Use frozen hedge_ratio + frozen mean/std so z-score is consistent with entry
+            latest_new = get_latest_zscore_with_hedge(entry_hedge_ratio, entry_mean, entry_std)
             if latest_new is None:
                 session_private.cancel_all_orders(category="linear", symbol=signal_positive_ticker)
                 session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
                 kill_switch = 1
                 continue
-            zscore_new, signal_sign_p_new, _ = latest_new
+            zscore_new, signal_sign_p_new, _, _, _ = latest_new
             zscore_new = _to_float(zscore_new)
 
             # ── Emergency Z-score stop-loss ─────────────────────────────────────────
@@ -233,7 +249,7 @@ def manage_new_trades(kill_switch):
                 session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
                 close_all_positions(kill_switch)
                 kill_switch = 1
-                return kill_switch, signal_side, entry_hedge_ratio
+                return kill_switch, signal_side, entry_hedge_ratio, entry_mean, entry_std
             # ────────────────────────────────────────────────────────────────────────
 
             if kill_switch == 0:
@@ -303,7 +319,7 @@ def manage_new_trades(kill_switch):
                                 time.sleep(3)
                                 close_all_positions(kill_switch)
                                 kill_switch = 2  # signal main loop to handle auto_trade + circuit breaker
-                                return kill_switch, signal_side, entry_hedge_ratio
+                                return kill_switch, signal_side, entry_hedge_ratio, entry_mean, entry_std
                             else:
                                 logger.warning(
                                     "Max retries reached for long order and no position opened. "
@@ -355,7 +371,7 @@ def manage_new_trades(kill_switch):
                                 time.sleep(3)
                                 close_all_positions(kill_switch)
                                 kill_switch = 2  # signal main loop to handle auto_trade + circuit breaker
-                                return kill_switch, signal_side, entry_hedge_ratio
+                                return kill_switch, signal_side, entry_hedge_ratio, entry_mean, entry_std
                             else:
                                 logger.warning(
                                     "Max retries reached for short order and no position opened. "
@@ -407,10 +423,10 @@ def manage_new_trades(kill_switch):
                         time.sleep(3)  # let Bybit register the fill before querying size
                         close_all_positions(kill_switch)
                         kill_switch = 2  # signal main loop to handle auto_trade + circuit breaker
-                        return kill_switch, signal_side, entry_hedge_ratio
+                        return kill_switch, signal_side, entry_hedge_ratio, entry_mean, entry_std
                     # ──────────────────────────────────────────────────────────────────────
 
                     kill_switch = 1
 
     # Output status
-    return kill_switch, signal_side, entry_hedge_ratio
+    return kill_switch, signal_side, entry_hedge_ratio, entry_mean, entry_std

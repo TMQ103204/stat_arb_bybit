@@ -245,7 +245,9 @@ async function saveExecutionConfig() {
     auto_trade: document.getElementById("e-autotrade").checked,
     custom_thresholds: document.getElementById("e-custom-thresholds").checked,
     exit_threshold: parseFloat(document.getElementById("e-exit-threshold").value) || 0.0,
-    leverage: parseInt(document.getElementById("e-leverage").value) || 1,
+    leverage: document.getElementById("e-custom-thresholds").checked
+      ? (parseInt(document.getElementById("e-leverage").value) || 1)
+      : 1,
 
     market_order_zscore_thresh: parseFloat(document.getElementById("e-market-zscore").value),
     min_profit_pct: parseFloat(document.getElementById("e-min-profit").value),

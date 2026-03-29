@@ -23,11 +23,11 @@ signal_positive_ticker = ticker_2
 signal_negative_ticker = ticker_1
 
 limit_order_basis = True # will ensure positions (except for Close) will be placed on limit basis
-auto_trade = True # If False, bot will gracefully stop instead of seeking new trades after a close
+auto_trade = False # If False, bot will gracefully stop instead of seeking new trades after a close
 
 tradeable_capital_usdt = 12 # total tradeable capital to be split between both pairs
-leverage = 2               # leverage multiplier (1x to 50x) — applied to both legs via set_leverage
-stop_loss_fail_safe = 0.15 # stop loss at market order in case of drastic event
+leverage = 1               # leverage multiplier (1x to 50x) — applied to both legs via set_leverage
+stop_loss_fail_safe = 2 # stop loss at market order in case of drastic event
 signal_trigger_thresh = 2 # z-score threshold which determines trade (must be above zero)
 zscore_stop_loss = 5      # emergency stop-loss: absolute z-score beyond which all positions are closed at market
 time_stop_loss_hours = 48 # maximum time in hours to hold a position before emergency close

@@ -1,2 +1,6 @@
-sym_1,sym_2,p_value,t_value,c_value,hedge_ratio,zero_crossings,half_life,hurst,win_rate,total_trades,composite_score
-NAORISUSDT,PNUTUSDT,0.0215,-3.65,-3.37,1.46206,31,2.65,0.8925,1.0,11,1.0
+sym_1,sym_2,p_value,t_value,c_value,hedge_ratio,zero_crossings,half_life,hurst,win_rate,total_trades,avg_net_profit,profit_factor,net_funding_rate,composite_score
+GRASSUSDT,POWERUSDT,0.0001,-5.04,-3.37,3.56558,30,3.52,0.641,0.8667,15,4.6053,68.5133,0.000255,1.1
+ETHFIUSDT,GRASSUSDT,0.0026,-4.29,-3.37,1.57143,34,4.3,0.8321,0.9333,15,2.9596,187.7063,0.0001,2.4000000000000004
+GRASSUSDT,LITUSDT,0.0126,-3.82,-3.37,0.35205,34,7.2,0.769,0.9286,14,2.5052,22.6593,0.0001,3.15
+AKTUSDT,BERAUSDT,0.0003,-4.85,-3.37,1.09957,32,4.36,0.7985,0.75,12,1.9193,8.06,0.000167,3.35
+ALGOUSDT,JUPUSDT,0.0201,-3.67,-3.37,0.56328,31,7.37,0.839,0.5833,12,0.2964,4.2745,5.3e-05,5.0

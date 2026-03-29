@@ -19,6 +19,14 @@ kline_limit = 200
 z_score_window = 21
 min_zero_crossings = 30
 
+# ── Quality Filters ──────────────────────────────────────────────────────────
+# Hard thresholds to reject low-quality pairs aggressively.
+# Goal: few pairs with REAL profitability, not many mediocre pairs.
+max_hurst = 0.85                 # reject strongly trending pairs (crypto altcoins typically 0.6-0.9)
+max_half_life_hours = 24         # reject slow-reverting pairs (capital locked too long)
+max_net_funding_rate = 0.0005    # reject if |net funding| > 0.05%/8h between the two legs
+min_backtest_profit_pct = 0.0    # reject if avg net profit per trade (after fees) <= 0
+
 # API KEYS from .env
 api_key_demo       = os.getenv("API_KEY_DEMO", "")
 api_secret_demo    = os.getenv("API_SECRET_DEMO", "")

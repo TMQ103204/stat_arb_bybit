@@ -15,6 +15,7 @@ if PROJECT_ROOT not in sys.path:
 from config_execution_api import signal_positive_ticker
 from config_execution_api import signal_negative_ticker
 from config_execution_api import auto_trade
+from config_execution_api import custom_thresholds, leverage
 from func_position_calls import open_position_confirmation
 from func_position_calls import active_position_confirmation
 from func_trade_management import manage_new_trades
@@ -22,7 +23,7 @@ from func_execution_calls import set_leverage
 from func_close_positions import close_all_positions
 from func_get_zscore import get_latest_zscore, get_latest_zscore_with_hedge
 from func_save_status import save_status
-from func_calcultions import calculate_exact_live_profit
+from func_calcultions import calculate_exact_live_profit, get_wallet_equity
 from logger_setup import get_logger
 from typing import cast
 import time
@@ -59,14 +60,17 @@ if __name__ == "__main__":
     kill_switch = 0
     position_open_time = 0.0
     entry_hedge_ratio = None  # frozen hedge_ratio at trade entry
+    entry_mean = None         # frozen spread mean at trade entry
+    entry_std = None          # frozen spread std at trade entry
     session_realized_loss = 0.0  # cumulative realized loss (USDT) this session — for circuit breaker
     last_close_pnl = 0.0  # net PnL of the last tick before close — used by circuit breaker
     save_status(status_dict)
 
-    # Set leverage in case forgotten to do so on the platform
-    logger.info("Setting leverage...")
-    set_leverage(signal_positive_ticker)
-    set_leverage(signal_negative_ticker)
+    # Set leverage — only apply custom leverage when custom_thresholds is enabled
+    effective_leverage = leverage if custom_thresholds else 1
+    logger.info("Setting leverage to %dx (custom_thresholds=%s)...", effective_leverage, custom_thresholds)
+    set_leverage(signal_positive_ticker, effective_leverage)
+    set_leverage(signal_negative_ticker, effective_leverage)
 
     # Commence bot
     logger.info("Seeking trades...")
@@ -124,24 +128,29 @@ if __name__ == "__main__":
             if is_manage_new_trades and kill_switch == 0:
                 status_dict["message"] = "Managing new trades..."
                 save_status(status_dict)
-                kill_switch, signal_side, entry_hedge_ratio = manage_new_trades(kill_switch)
+                kill_switch, signal_side, entry_hedge_ratio, entry_mean, entry_std = manage_new_trades(kill_switch)
                 if kill_switch == 1:
                     position_open_time = time.time()
-                    logger.info("Trade entered with frozen hedge_ratio=%.6f", entry_hedge_ratio if entry_hedge_ratio else 0)
+                    logger.info("Trade entered with frozen hedge_ratio=%.6f  mean=%.8f  std=%.8f",
+                                entry_hedge_ratio if entry_hedge_ratio else 0,
+                                entry_mean if entry_mean else 0,
+                                entry_std if entry_std else 0)
 
             # If BOTH legs are open but kill_switch is 0 (e.g., bot restarted), re-attach to HOLDING
             if both_legs_open and kill_switch == 0:
                 kill_switch = 1
                 position_open_time = time.time()
-                # Determine signal_side and freeze hedge_ratio for re-attach
+                # Determine signal_side and freeze hedge_ratio + mean/std for re-attach
                 if not signal_side or entry_hedge_ratio is None:
                     reattach_result = get_latest_zscore_with_hedge()
                     if reattach_result is not None:
-                        reattach_zscore, _, entry_hedge_ratio = reattach_result
+                        reattach_zscore, _, entry_hedge_ratio, entry_mean, entry_std = reattach_result
                         reattach_zscore = float(cast(float, reattach_zscore))
                         signal_side = "positive" if reattach_zscore > 0 else "negative"
-                        logger.info("Re-attached (both legs): signal_side=%s (z-score=%.4f) hedge_ratio=%.6f",
-                                    signal_side, reattach_zscore, entry_hedge_ratio)
+                        logger.info("Re-attached (both legs): signal_side=%s (z-score=%.4f) "
+                                    "hedge_ratio=%.6f mean=%.8f std=%.8f",
+                                    signal_side, reattach_zscore,
+                                    entry_hedge_ratio, entry_mean, entry_std)
                     else:
                         signal_side = "positive"  # fallback
                         logger.warning("Re-attached with fallback signal_side=positive")
@@ -151,10 +160,10 @@ if __name__ == "__main__":
             # Manage open position: stop-losses & take-profit
             if kill_switch == 1:
 
-                # Get and save the latest z-score using frozen hedge_ratio
-                result = get_latest_zscore_with_hedge(entry_hedge_ratio)
+                # Get and save the latest z-score using frozen hedge_ratio + mean/std
+                result = get_latest_zscore_with_hedge(entry_hedge_ratio, entry_mean, entry_std)
                 if result is not None:
-                    zscore, signal_sign_positive, _ = result
+                    zscore, signal_sign_positive, _, _, _ = result
                     zscore = float(cast(float, zscore))
                 else:
                     continue
@@ -238,13 +247,16 @@ if __name__ == "__main__":
                 # ──────────────────────────────────────────────────────────────────
 
                 # ── Bug #1 fix: session loss circuit breaker ──────────────────────
-                from config_execution_api import max_session_loss_pct, tradeable_capital_usdt
+                from config_execution_api import max_session_loss_pct
                 if last_close_pnl < 0:
                     session_realized_loss += abs(last_close_pnl)
-                session_loss_pct = (session_realized_loss / tradeable_capital_usdt) * 100 if tradeable_capital_usdt > 0 else 0
+                # Use REAL starting capital from wallet API, not config value
+                wallet_info = get_wallet_equity()
+                real_capital = wallet_info["starting_capital"] if wallet_info else 0.0
+                session_loss_pct = (session_realized_loss / real_capital) * 100 if real_capital > 0 else 0
                 logger.info(
-                    "Session loss tracker: this trade %.3f USDT | cumulative %.3f USDT (%.2f%%)",
-                    last_close_pnl, session_realized_loss, session_loss_pct
+                    "Session loss tracker: this trade %.3f USDT | cumulative %.3f USDT (%.2f%% of $%.2f)",
+                    last_close_pnl, session_realized_loss, session_loss_pct, real_capital
                 )
                 if session_loss_pct >= float(max_session_loss_pct):
                     logger.critical(
@@ -256,6 +268,8 @@ if __name__ == "__main__":
                     sys.exit(1)
                 last_close_pnl = 0.0  # reset for next trade
                 entry_hedge_ratio = None  # reset frozen hedge_ratio for next trade
+                entry_mean = None         # reset frozen mean for next trade
+                entry_std = None          # reset frozen std for next trade
                 # ──────────────────────────────────────────────────────────────────
 
                 # Sleep after closing — let market settle before seeking new signal.

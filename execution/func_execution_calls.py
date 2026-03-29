@@ -3,9 +3,9 @@ from config_execution_api import limit_order_basis
 from config_execution_api import session_public
 from config_execution_api import market_order_zscore_thresh
 from config_execution_api import min_profit_pct
-from config_execution_api import taker_fee_pct
 from config_execution_api import z_score_window
-from func_calcultions import get_trade_details
+from config_execution_api import ticker_1, ticker_2
+from func_calcultions import get_trade_details, _get_taker_fee_rate
 from logger_setup import get_logger
 from bybit_response import get_result_dict, get_ret_code
 
@@ -16,20 +16,28 @@ def should_use_market(z_score: float) -> bool:
     """Return True if |z_score| is high enough AND expected profit after taker fees
     exceeds the configured minimum, making a market order worthwhile.
 
+    Uses LIVE taker fee rates from Bybit API (cached 1 hour) instead of
+    hard-coded config values.
+
     Logic:
       expected_move_pct  = |z| / window * 100
-      round_trip_fee_pct = taker_fee_pct * 4   (open 2 legs + close 2 legs)
+      round_trip_fee_pct = (fee_1 + fee_2) * 2  (open + close both legs)
       net_profit_pct     = expected_move_pct - round_trip_fee_pct
     """
     if abs(z_score) < float(market_order_zscore_thresh):
         return False
+
+    # Get LIVE fee rates from Bybit API (fallback to 0.055% if API fails)
+    fee_1 = _get_taker_fee_rate(ticker_1, fallback_rate=0.00055) * 100  # to %
+    fee_2 = _get_taker_fee_rate(ticker_2, fallback_rate=0.00055) * 100  # to %
+    round_trip_fee_pct = (fee_1 + fee_2) * 2  # open 2 legs + close 2 legs
+
     expected_move_pct = abs(z_score) / float(z_score_window) * 100.0
-    round_trip_fee_pct = float(taker_fee_pct) * 4.0
     net_profit_pct = expected_move_pct - round_trip_fee_pct
     use_market = net_profit_pct >= float(min_profit_pct)
     if use_market:
         logger.info(
-            "MARKET ORDER decision: |z|=%.4f expected_move=%.2f%% fees=%.2f%% net=%.2f%% >= %.2f%%",
+            "MARKET ORDER decision: |z|=%.4f expected_move=%.2f%% fees=%.2f%% (live) net=%.2f%% >= %.2f%%",
             abs(z_score), expected_move_pct, round_trip_fee_pct, net_profit_pct, min_profit_pct,
         )
     return use_market

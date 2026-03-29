@@ -155,26 +155,17 @@ def calculate_exact_live_profit(long_ticker, short_ticker):
     """
     Calculate the current net PnL of an open pair trade using live Bybit data.
 
-    Queries the orderbook for realistic exit prices (best bid for long,
-    best ask for short), reads actual position entry prices and sizes,
-    and fetches each symbol's real-time taker fee rate from the API.
-    This correctly handles cases where the two coins have different fee tiers
-    (e.g. 0.055% vs 0.11%).
+    Uses Bybit's own `unrealisedPnl` and `cumRealisedPnl` fields directly
+    from the positions API. This matches EXACTLY what the Bybit UI shows,
+    including all fees and mark-price calculations done server-side.
 
     Returns:
         (total_net_pnl_usdt, net_profit_pct) — both 0.0 on any error.
+        Returns (None, None) on API failure.
     """
     from config_execution_api import session_private as _priv
     try:
-        # -- 1. Live exit prices from the orderbook ---------------------------
-        ob_long  = session_public.get_orderbook(category="linear", symbol=long_ticker,  limit=1)
-        ob_short = session_public.get_orderbook(category="linear", symbol=short_ticker, limit=1)
-
-        # Long exits at the best bid; short exits at the best ask
-        best_bid_long  = float(ob_long["result"]["b"][0][0])
-        best_ask_short = float(ob_short["result"]["a"][0][0])
-
-        # -- 2. Current position data -----------------------------------------
+        # -- 1. Current position data from Bybit ──────────────────────────
         pos_long_res  = _priv.get_positions(category="linear", symbol=long_ticker)
         pos_short_res = _priv.get_positions(category="linear", symbol=short_ticker)
 
@@ -183,41 +174,81 @@ def calculate_exact_live_profit(long_ticker, short_ticker):
 
         size_long       = float(pos_long["size"])
         avg_price_long  = float(pos_long["avgPrice"])
-        entry_pnl_long  = float(pos_long["cumRealisedPnl"])   # negative = fees paid on entry
-
         size_short      = float(pos_short["size"])
         avg_price_short = float(pos_short["avgPrice"])
-        entry_pnl_short = float(pos_short["cumRealisedPnl"])  # negative = fees paid on entry
 
         if size_long == 0 or size_short == 0:
             return 0.0, 0.0
 
-        # -- 3. Real-time taker fee rates (handles 0.055% vs 0.11% per coin) --
-        # Uses a dedicated mainnet session (demo blocks this endpoint).
-        # Rates are cached for 1 hour so we don't call the API every tick.
-        from config_execution_api import taker_fee_pct as _fallback_fee_pct
-        _fallback_rate = _fallback_fee_pct / 100.0
-        taker_rate_long  = _get_taker_fee_rate(long_ticker,  _fallback_rate)
-        taker_rate_short = _get_taker_fee_rate(short_ticker, _fallback_rate)
+        # -- 2. Use Bybit's own PnL fields (matches UI exactly) ──────────
+        # unrealisedPnl: unrealized P&L based on mark price (includes fees)
+        # cumRealisedPnl: cumulative realized P&L for this position (entry fees, funding, etc.)
+        unrealised_long  = float(pos_long.get("unrealisedPnl", 0))
+        realised_long    = float(pos_long.get("cumRealisedPnl", 0))
+        unrealised_short = float(pos_short.get("unrealisedPnl", 0))
+        realised_short   = float(pos_short.get("cumRealisedPnl", 0))
 
-        # -- 4. Gross PnL per leg ---------------------------------------------
-        gross_pnl_long  = (best_bid_long  - avg_price_long)  * size_long
-        gross_pnl_short = (avg_price_short - best_ask_short) * size_short
+        # Total PnL per leg = unrealised + cumulative realised (fees, funding paid so far)
+        pnl_long  = unrealised_long + realised_long
+        pnl_short = unrealised_short + realised_short
 
-        # -- 5. Exit fee (market close) per leg --------------------------------
-        exit_fee_long  = best_bid_long  * size_long  * taker_rate_long
-        exit_fee_short = best_ask_short * size_short * taker_rate_short
+        total_net_pnl_usdt = pnl_long + pnl_short
 
-        # -- 6. Net PnL = Gross + entry realised PnL (already signed) - exit fee
-        net_pnl_long  = gross_pnl_long  + entry_pnl_long  - exit_fee_long
-        net_pnl_short = gross_pnl_short + entry_pnl_short - exit_fee_short
-
-        total_net_pnl_usdt = net_pnl_long + net_pnl_short
-        total_capital      = (avg_price_long * size_long) + (avg_price_short * size_short)
-        net_profit_pct     = (total_net_pnl_usdt / total_capital) * 100 if total_capital > 0 else 0.0
+        # -- 3. Profit percentage relative to total entry capital ─────────
+        total_capital = (avg_price_long * size_long) + (avg_price_short * size_short)
+        net_profit_pct = (total_net_pnl_usdt / total_capital) * 100 if total_capital > 0 else 0.0
 
         return total_net_pnl_usdt, net_profit_pct
 
     except Exception as e:
         logger.warning("calculate_exact_live_profit failed (%s %s): %s", long_ticker, short_ticker, e)
         return None, None
+
+
+def get_wallet_equity():
+    """
+    Get live account equity and capital from Bybit Wallet Balance API.
+
+    Returns:
+        dict with keys:
+            - equity:           total account equity (wallet + unrealised)
+            - wallet_balance:   current USDT wallet balance (realized only)
+            - starting_capital: initial deposit = wallet_balance - cumRealisedPnl
+            - cum_realised_pnl: cumulative realized P&L since account creation
+            - unrealised_pnl:   P&L of currently open positions
+        Returns None on API failure.
+    """
+    from config_execution_api import session_private as _priv
+    try:
+        resp = _priv.get_wallet_balance(accountType="UNIFIED")
+        accounts = resp.get("result", {}).get("list", [])
+        if not accounts:
+            return None
+
+        acc = accounts[0]
+        equity = float(acc.get("totalEquity", 0))
+
+        wallet_balance = 0.0
+        unrealised_pnl = 0.0
+        cum_realised_pnl = 0.0
+
+        for coin in acc.get("coin", []):
+            if coin.get("coin") == "USDT":
+                wallet_balance   = float(coin.get("walletBalance", 0))
+                unrealised_pnl   = float(coin.get("unrealisedPnl", 0))
+                cum_realised_pnl = float(coin.get("cumRealisedPnl", 0))
+                break
+
+        starting_capital = wallet_balance - cum_realised_pnl
+
+        return {
+            "equity":           equity,
+            "wallet_balance":   wallet_balance,
+            "starting_capital": starting_capital,
+            "cum_realised_pnl": cum_realised_pnl,
+            "unrealised_pnl":   unrealised_pnl,
+        }
+    except Exception as e:
+        logger.warning("get_wallet_equity failed: %s", e)
+        return None
+
