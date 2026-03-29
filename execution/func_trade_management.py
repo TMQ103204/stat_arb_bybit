@@ -51,8 +51,6 @@ def manage_new_trades(kill_switch):
         return kill_switch, signal_side, entry_hedge_ratio, entry_mean, entry_std
     zscore, signal_sign_positive, entry_hedge_ratio, entry_mean, entry_std = latest
     zscore = _to_float(zscore)
-    logger.info("Entry frozen: hedge_ratio=%.6f  mean=%.8f  std=%.8f",
-                entry_hedge_ratio, entry_mean, entry_std)
 
     # ── Stop-loss zone guard ──────────────────────────────────────────────────
     # If Z-score is at or above the stop-loss threshold, do NOT open new trades.
