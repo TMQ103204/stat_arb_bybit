@@ -17,8 +17,8 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 # CONFIG VARIABLES
 # mode options: "test" (testnet), "demo" (mainnet demo - real prices, virtual money), "live" (real money)
 mode = "live"
-ticker_1 = "GRASSUSDT"
-ticker_2 = "POWERUSDT"
+ticker_1 = "AKTUSDT"
+ticker_2 = "GRASSUSDT"
 signal_positive_ticker = ticker_2
 signal_negative_ticker = ticker_1
 
@@ -27,8 +27,8 @@ auto_trade = False # If False, bot will gracefully stop instead of seeking new t
 
 tradeable_capital_usdt = 11 # total tradeable capital to be split between both pairs
 leverage = 1               # leverage multiplier (1x to 50x) — applied to both legs via set_leverage
-stop_loss_fail_safe = 2 # stop loss at market order in case of drastic event
-signal_trigger_thresh = 2 # z-score threshold which determines trade (must be above zero)
+stop_loss_fail_safe = 1 # stop loss at market order in case of drastic event
+signal_trigger_thresh = 1 # z-score threshold which determines trade (must be above zero)
 zscore_stop_loss = 5      # emergency stop-loss: absolute z-score beyond which all positions are closed at market
 time_stop_loss_hours = 48 # maximum time in hours to hold a position before emergency close
 max_session_loss_pct = 3.0 # halt bot entirely if cumulative session loss exceeds this % of tradeable capital
@@ -82,7 +82,7 @@ if mode == "live":
     _cfg_logger.warning(
         "\n"
         "╔══════════════════════════════════════════════════╗\n"
-        "║  ⚠️  LIVE MODE — REAL MONEY TRADING ACTIVE  ⚠️   ║\n"
+        "║  ⚠️  LIVE MODE — REAL MONEY TRADING ACTIVE  ⚠️  ║\n"
         "║  All orders will execute on Bybit MAINNET.       ║\n"
         "╚══════════════════════════════════════════════════╝"
     )
