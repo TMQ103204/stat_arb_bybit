@@ -23,7 +23,7 @@ from func_execution_calls import set_leverage
 from func_close_positions import close_all_positions
 from func_get_zscore import get_latest_zscore, get_latest_zscore_with_hedge
 from func_save_status import save_status
-from func_calcultions import calculate_exact_live_profit, get_wallet_equity
+from func_calcultions import calculate_exact_live_profit, get_wallet_equity, snapshot_cumrealised_pnl
 from logger_setup import get_logger
 from typing import cast
 import time
@@ -64,6 +64,8 @@ if __name__ == "__main__":
     entry_std = None          # frozen spread std at trade entry
     session_realized_loss = 0.0  # cumulative realized loss (USDT) this session — for circuit breaker
     last_close_pnl = 0.0  # net PnL of the last tick before close — used by circuit breaker
+    baseline_realised_long = 0.0   # cumRealisedPnl snapshot at trade entry (long leg)
+    baseline_realised_short = 0.0  # cumRealisedPnl snapshot at trade entry (short leg)
     save_status(status_dict)
 
     # Set leverage — only apply custom leverage when custom_thresholds is enabled
@@ -135,6 +137,10 @@ if __name__ == "__main__":
                                 entry_hedge_ratio if entry_hedge_ratio else 0,
                                 entry_mean if entry_mean else 0,
                                 entry_std if entry_std else 0)
+                    # Snapshot cumRealisedPnl so PnL only counts THIS trade
+                    long_t  = signal_positive_ticker if signal_side == "positive" else signal_negative_ticker
+                    short_t = signal_negative_ticker if signal_side == "positive" else signal_positive_ticker
+                    baseline_realised_long, baseline_realised_short = snapshot_cumrealised_pnl(long_t, short_t)
 
             # If BOTH legs are open but kill_switch is 0 (e.g., bot restarted), re-attach to HOLDING
             if both_legs_open and kill_switch == 0:
@@ -154,6 +160,10 @@ if __name__ == "__main__":
                     else:
                         signal_side = "positive"  # fallback
                         logger.warning("Re-attached with fallback signal_side=positive")
+                # Snapshot cumRealisedPnl baseline for re-attached trade
+                long_t  = signal_positive_ticker if signal_side == "positive" else signal_negative_ticker
+                short_t = signal_negative_ticker if signal_side == "positive" else signal_positive_ticker
+                baseline_realised_long, baseline_realised_short = snapshot_cumrealised_pnl(long_t, short_t)
                 status_dict["message"] = f"Re-attached to full hedge position (side={signal_side})"
                 save_status(status_dict)
 
@@ -180,7 +190,8 @@ if __name__ == "__main__":
                 short_ticker = signal_negative_ticker if signal_side == "positive" else signal_positive_ticker
 
                 # Live net PnL — accounts for exact entry/exit fees per coin (0.055% or 0.11%)
-                live_net_pnl_usdt, live_net_profit_pct = calculate_exact_live_profit(long_ticker, short_ticker)
+                live_net_pnl_usdt, live_net_profit_pct = calculate_exact_live_profit(
+                    long_ticker, short_ticker, baseline_realised_long, baseline_realised_short)
 
                 # ── Bug #2 fix: if PnL calculation failed, skip this tick ─────────
                 if live_net_pnl_usdt is None:

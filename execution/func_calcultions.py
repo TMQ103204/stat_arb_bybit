@@ -151,13 +151,43 @@ def get_trade_details(orderbook, direction="Long", capital=0):
     return (mid_price, stop_loss, quantity)
 
 
-def calculate_exact_live_profit(long_ticker, short_ticker):
+def snapshot_cumrealised_pnl(long_ticker, short_ticker):
+    """
+    Snapshot the current cumRealisedPnl for both legs at trade entry time.
+    This baseline is subtracted during PnL calculation so only THIS trade's
+    realised PnL (fees, funding since entry) is counted.
+
+    Returns:
+        (baseline_long, baseline_short) — floats, or (0.0, 0.0) on error.
+    """
+    from config_execution_api import session_private as _priv
+    try:
+        pos_long_res  = _priv.get_positions(category="linear", symbol=long_ticker)
+        pos_short_res = _priv.get_positions(category="linear", symbol=short_ticker)
+        pos_long  = get_result_list(pos_long_res)[0]
+        pos_short = get_result_list(pos_short_res)[0]
+        bl = float(pos_long.get("cumRealisedPnl", 0))
+        bs = float(pos_short.get("cumRealisedPnl", 0))
+        logger.info("PnL baseline snapshot: long %s=%.6f, short %s=%.6f",
+                     long_ticker, bl, short_ticker, bs)
+        return bl, bs
+    except Exception as e:
+        logger.warning("snapshot_cumrealised_pnl failed: %s", e)
+        return 0.0, 0.0
+
+
+def calculate_exact_live_profit(long_ticker, short_ticker,
+                                baseline_realised_long=0.0,
+                                baseline_realised_short=0.0):
     """
     Calculate the current net PnL of an open pair trade using live Bybit data.
 
     Uses Bybit's own `unrealisedPnl` and `cumRealisedPnl` fields directly
-    from the positions API. This matches EXACTLY what the Bybit UI shows,
-    including all fees and mark-price calculations done server-side.
+    from the positions API.
+
+    The baseline_realised_* params are subtracted from cumRealisedPnl so that
+    only THIS trade's realised costs (entry fees, funding since entry) are
+    counted — not carry-over PnL from previous trades on the same symbol.
 
     Returns:
         (total_net_pnl_usdt, net_profit_pct) — both 0.0 on any error.
@@ -180,15 +210,13 @@ def calculate_exact_live_profit(long_ticker, short_ticker):
         if size_long == 0 or size_short == 0:
             return 0.0, 0.0
 
-        # -- 2. Use Bybit's own PnL fields (matches UI exactly) ──────────
-        # unrealisedPnl: unrealized P&L based on mark price (includes fees)
-        # cumRealisedPnl: cumulative realized P&L for this position (entry fees, funding, etc.)
+        # -- 2. Use Bybit's own PnL fields ────────────────────────────────
         unrealised_long  = float(pos_long.get("unrealisedPnl", 0))
-        realised_long    = float(pos_long.get("cumRealisedPnl", 0))
+        realised_long    = float(pos_long.get("cumRealisedPnl", 0)) - baseline_realised_long
         unrealised_short = float(pos_short.get("unrealisedPnl", 0))
-        realised_short   = float(pos_short.get("cumRealisedPnl", 0))
+        realised_short   = float(pos_short.get("cumRealisedPnl", 0)) - baseline_realised_short
 
-        # Total PnL per leg = unrealised + cumulative realised (fees, funding paid so far)
+        # Total PnL per leg = unrealised + realised delta (only this trade)
         pnl_long  = unrealised_long + realised_long
         pnl_short = unrealised_short + realised_short
 
