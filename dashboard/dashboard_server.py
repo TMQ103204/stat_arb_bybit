@@ -483,7 +483,12 @@ def test_leverage():
                 results.append({"symbol": ticker, "success": ok,
                                 "retCode": ret_code, "retMsg": ret_msg})
             except Exception as e:
-                results.append({"symbol": ticker, "success": False, "error": str(e)})
+                err_str = str(e).lower()
+                if "not modified" in err_str or "110043" in err_str:
+                    results.append({"symbol": ticker, "success": True,
+                                    "retMsg": "Already at target leverage (no change needed)"})
+                else:
+                    results.append({"symbol": ticker, "success": False, "error": str(e)})
 
         all_ok = all(r["success"] for r in results)
         return jsonify({"status": "ok" if all_ok else "partial_fail",
@@ -615,8 +620,14 @@ def get_backtest_pair():
 @app.route("/api/backtest/pair/live", methods=["GET"])
 def get_backtest_pair_live():
     """Fetch LIVE klines from Bybit and compute spread/zscore for charting
-    using ROLLING OLS — each candle gets its own β from a trailing window,
-    making z-score history stable and historically accurate."""
+    using BOT-EQUIVALENT REPLAY — at each historical point T, we replay
+    exactly what the bot's get_latest_zscore() would have computed:
+      1. Take kline_limit candles ending at T
+      2. Run ONE OLS → ONE hedge_ratio β_T
+      3. Compute ALL kline_limit spreads using that single β_T
+      4. Compute rolling z-score (window=z_score_window) on those spreads
+      5. Take the LAST z-score value = what the bot would have seen at time T
+    This ensures the chart accurately represents bot decision points."""
     try:
         import math as _math
         import pandas as pd
@@ -668,29 +679,48 @@ def get_backtest_pair_live():
         if len(p1) < config_kline_limit + z_window:
             return jsonify({"error": "Insufficient data points"}), 400
 
-        # ── Rolling OLS: each candle gets its own β ──
-        spreads = []
-        hedge_ratios = []
+        # ── BOT-EQUIVALENT REPLAY ──────────────────────────────────────
+        # At each display point T, replay what the bot would have computed:
+        #   - Take kline_limit candles ending at T (inclusive)
+        #   - OLS on those candles → single β_T (hedge_ratio)
+        #   - Compute ALL spreads in the window using β_T
+        #   - Rolling z-score on those spreads → take LAST value
+        # This matches get_latest_zscore() → calculate_metrics() exactly.
+        replay_zscores = []
+        replay_spreads = []
+        replay_hedge_ratios = []
         valid_p1 = []
         valid_p2 = []
         valid_ts = []
-        for i in range(config_kline_limit, len(p1)):
-            window_p1 = p1[i - config_kline_limit:i]
-            window_p2 = p2[i - config_kline_limit:i]
-            model = sm.OLS(window_p1, window_p2).fit()
-            beta_i = float(model.params[0])
-            spread_i = p1[i] - beta_i * p2[i]
-            spreads.append(spread_i)
-            hedge_ratios.append(beta_i)
-            valid_p1.append(p1[i])
-            valid_p2.append(p2[i])
-            valid_ts.append(ts[i])
 
-        # Z-score from rolling spread
-        spread_series = pd.Series(spreads)
-        mean = spread_series.rolling(window=z_window).mean()
-        std = spread_series.rolling(window=z_window).std()
-        zscores = ((spread_series - mean) / std).tolist()
+        for T in range(config_kline_limit, len(p1)):
+            # Window of kline_limit candles ending at T (same as bot's get_latest_klines)
+            window_p1 = p1[T - config_kline_limit + 1:T + 1]
+            window_p2 = p2[T - config_kline_limit + 1:T + 1]
+
+            # Single OLS on entire window → one hedge_ratio (same as bot)
+            model = sm.OLS(window_p1, window_p2).fit()
+            beta_T = float(model.params[0])
+
+            # Compute ALL spreads using this single β_T (same as bot)
+            window_spread = [window_p1[j] - beta_T * window_p2[j]
+                             for j in range(len(window_p1))]
+
+            # Rolling z-score on those spreads (same as bot's calculate_zscore)
+            spread_series = pd.Series(window_spread)
+            mean = spread_series.rolling(center=False, window=z_window).mean()
+            std = spread_series.rolling(center=False, window=z_window).std()
+            z_series = (spread_series - mean) / std
+
+            # Take the LAST z-score = what the bot sees at time T
+            z_at_T = float(z_series.iloc[-1])
+
+            replay_zscores.append(z_at_T)
+            replay_spreads.append(window_spread[-1])
+            replay_hedge_ratios.append(beta_T)
+            valid_p1.append(p1[T])
+            valid_p2.append(p2[T])
+            valid_ts.append(ts[T])
 
         def safe(val):
             try:
@@ -708,8 +738,8 @@ def get_backtest_pair_live():
             full_rows.append({
                 sym1: valid_p1[i],
                 sym2: valid_p2[i],
-                "Spread": safe(spreads[i]),
-                "ZScore": safe(zscores[i]) if i < len(zscores) else None,
+                "Spread": safe(replay_spreads[i]),
+                "ZScore": safe(replay_zscores[i]),
                 "Time": dt.strftime("%m/%d %H:%M"),
             })
 
@@ -719,6 +749,7 @@ def get_backtest_pair_live():
         return jsonify({
             "data": rows,
             "columns": [sym1, sym2, "Spread", "ZScore", "Time"],
+            "method": "bot_equivalent_replay",
         })
     except Exception as e:
         import traceback
@@ -774,8 +805,14 @@ def _get_hedge_ratio(sym1, sym2):
 def _compute_pair_zscores(sym1, sym2, kline_limit=None, timeframe_override=None):
     """
     Fetch klines for sym1/sym2 and return (zscore_list, timestamps_ms_list,
-    hedge_ratio) using ROLLING OLS — each candle gets its own β from a
-    trailing window, making z-score history stable and historically accurate.
+    hedge_ratio) using BOT-EQUIVALENT REPLAY.
+
+    At each point T, we replay exactly what the bot's get_latest_zscore()
+    would compute:
+      1. Take kline_limit candles ending at T
+      2. ONE OLS → single hedge_ratio β_T
+      3. Compute ALL spreads using β_T
+      4. Rolling z-score → take LAST value
     """
     import math as _math
     import statsmodels.api as sm
@@ -817,32 +854,37 @@ def _compute_pair_zscores(sym1, sym2, kline_limit=None, timeframe_override=None)
 
     n2 = min(len(p1), len(p2))
     if n2 < kline_limit + z_window:
-        raise ValueError("Insufficient data for rolling OLS")
+        raise ValueError("Insufficient data for bot-equivalent replay")
 
     p1, p2, ts = p1[-n2:], p2[-n2:], ts[-n2:]
 
-    # ── Rolling OLS: each candle i gets β_i from trailing kline_limit window ──
-    spreads = []
-    hedge_ratios = []
+    # ── BOT-EQUIVALENT REPLAY ──────────────────────────────────────────
+    zscores = []
     valid_ts = []
-    for i in range(kline_limit, n2):
-        window_p1 = p1[i - kline_limit:i]
-        window_p2 = p2[i - kline_limit:i]
+    latest_hr = 0.0
+    for T in range(kline_limit, n2):
+        # Window of kline_limit candles ending at T (inclusive)
+        window_p1 = p1[T - kline_limit + 1:T + 1]
+        window_p2 = p2[T - kline_limit + 1:T + 1]
+
+        # Single OLS on entire window → one hedge_ratio (same as bot)
         model = sm.OLS(window_p1, window_p2).fit()
-        beta_i = float(model.params[0])
-        spread_i = p1[i] - beta_i * p2[i]
-        spreads.append(spread_i)
-        hedge_ratios.append(beta_i)
-        valid_ts.append(ts[i])
+        beta_T = float(model.params[0])
 
-    # Z-score from rolling spread using pandas rolling mean/std
-    spread_series = pd.Series(spreads)
-    mean = spread_series.rolling(window=z_window).mean()
-    std = spread_series.rolling(window=z_window).std()
-    zscores = ((spread_series - mean) / std).tolist()
+        # Compute ALL spreads using this single β_T
+        window_spread = [window_p1[j] - beta_T * window_p2[j]
+                         for j in range(len(window_p1))]
 
-    # Latest hedge_ratio (for reference)
-    latest_hr = hedge_ratios[-1] if hedge_ratios else 0.0
+        # Rolling z-score (same as bot's calculate_zscore)
+        spread_series = pd.Series(window_spread)
+        mean = spread_series.rolling(center=False, window=z_window).mean()
+        std = spread_series.rolling(center=False, window=z_window).std()
+        z_series = (spread_series - mean) / std
+
+        z_at_T = float(z_series.iloc[-1])
+        zscores.append(z_at_T)
+        valid_ts.append(ts[T])
+        latest_hr = beta_T
 
     return zscores, valid_ts, latest_hr
 
