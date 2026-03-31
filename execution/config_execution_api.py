@@ -16,19 +16,19 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 # CONFIG VARIABLES
 # mode options: "test" (testnet), "demo" (mainnet demo - real prices, virtual money), "live" (real money)
-mode = "demo"
-ticker_1 = "AEROUSDT"
-ticker_2 = "KAITOUSDT"
+mode = "live"
+ticker_1 = "BANANAS31USDT"
+ticker_2 = "SKRUSDT"
 signal_positive_ticker = ticker_2
 signal_negative_ticker = ticker_1
 
 limit_order_basis = True # will ensure positions (except for Close) will be placed on limit basis
-auto_trade = False # If False, bot will gracefully stop instead of seeking new trades after a close
+auto_trade = True # If False, bot will gracefully stop instead of seeking new trades after a close
 
-tradeable_capital_usdt = 110 # total tradeable capital to be split between both pairs
-leverage = 10               # leverage multiplier (1x to 50x) — applied to both legs via set_leverage
+tradeable_capital_usdt = 11 # total tradeable capital to be split between both pairs
+leverage = 2               # leverage multiplier (1x to 50x) — applied to both legs via set_leverage
 stop_loss_fail_safe = 0 # stop loss at market order in case of drastic event
-signal_trigger_thresh = 2.3 # z-score threshold which determines trade (must be above zero)
+signal_trigger_thresh = 1.1 # z-score threshold which determines trade (must be above zero)
 zscore_stop_loss = 10      # emergency stop-loss: absolute z-score beyond which all positions are closed at market
 time_stop_loss_hours = 48 # maximum time in hours to hold a position before emergency close
 max_session_loss_pct = 10.0 # halt bot entirely if cumulative session loss exceeds this % of tradeable capital

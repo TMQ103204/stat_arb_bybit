@@ -133,11 +133,13 @@ def get_trade_details(orderbook, direction="Long", capital=0):
         if direction == "Long" and nearest_ask > 0:
             # Aggressive limit: use best ask so the order crosses the spread and fills immediately
             mid_price = nearest_ask
-            stop_loss = round(mid_price * (1 - stop_loss_fail_safe), price_rounding)
+            if stop_loss_fail_safe > 0:
+                stop_loss = round(mid_price * (1 - stop_loss_fail_safe), price_rounding)
         elif direction != "Long" and nearest_bid > 0:
             # Aggressive limit: use best bid so the order crosses the spread and fills immediately
             mid_price = nearest_bid
-            stop_loss = round(mid_price * (1 + stop_loss_fail_safe), price_rounding)
+            if stop_loss_fail_safe > 0:
+                stop_loss = round(mid_price * (1 + stop_loss_fail_safe), price_rounding)
 
         # Calculate quantity
         if mid_price > 0:
