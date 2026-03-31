@@ -68,36 +68,33 @@ def place_order(ticker, price, quantity, direction, stop_loss, force_market=Fals
 
     side = "Buy" if direction == "Long" else "Sell"
 
+    # Build common order params
+    params = dict(
+        category="linear",
+        symbol=ticker,
+        side=side,
+        qty=str(quantity),
+        timeInForce="GTC",
+        reduceOnly=False,
+        closeOnTrigger=False,
+    )
+
+    # Only attach stopLoss if a valid value was calculated (stop_loss_fail_safe > 0)
+    if stop_loss and stop_loss > 0:
+        params["stopLoss"] = str(stop_loss)
+
     # Market order: when forced (leg-gap rescue) or limit_order_basis is off
     if force_market or not limit_order_basis:
-        order = session_private.place_order(
-            category="linear",
-            symbol=ticker,
-            side=side,
-            orderType="Market",
-            qty=str(quantity),
-            timeInForce="GTC",
-            reduceOnly=False,
-            closeOnTrigger=False,
-            stopLoss=str(stop_loss)
-        )
+        params["orderType"] = "Market"
+        order = session_private.place_order(**params)
         logger.info("MARKET order sent: %s %s qty=%s", direction, ticker, quantity)
     else:
         # Aggressive limit: GTC at best ask (Long) or best bid (Short).
         # Fills immediately like a taker order, but protects against slippage
         # worse than the visible orderbook price.
-        order = session_private.place_order(
-            category="linear",
-            symbol=ticker,
-            side=side,
-            orderType="Limit",
-            qty=str(quantity),
-            price=str(price),
-            timeInForce="GTC",        # was PostOnly — GTC allows immediate taker fills
-            reduceOnly=False,
-            closeOnTrigger=False,
-            stopLoss=str(stop_loss)
-        )
+        params["orderType"] = "Limit"
+        params["price"] = str(price)
+        order = session_private.place_order(**params)
 
     return order
 

@@ -985,6 +985,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
 async function startExecution() {
   try {
+    // Always save config to disk BEFORE spawning the bot subprocess,
+    // so the new process reads the latest values (e.g. zscore_stop_loss).
+    await saveExecutionConfig();
     const res = await api("/api/execution/start", { method: "POST" });
     if (res.error) return toast(res.error, "error");
     toast("Execution bot started", "success");
