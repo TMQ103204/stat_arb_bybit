@@ -307,6 +307,7 @@ body {
 
 /* ── Header Performance Panel ───────────────────────────────────── */
 .header-perf {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -321,7 +322,6 @@ body {
     0 2px 12px rgba(0, 0, 0, 0.3),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
   flex: 0 0 auto;
-  /* no absolute positioning — sits naturally in flex row */
 }
 
 /* Metrics row (3 chips + separators) */
@@ -555,6 +555,92 @@ body {
 .perf-cal-day.today.selected {
   box-shadow: 0 0 14px var(--brand-glow);
 }
+
+/* ── Performance Detail Popup ─────────────────────────────────────── */
+.perf-detail-popup {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, 94vw);
+  background: rgba(10, 14, 28, 0.97);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 16px;
+  padding: 0;
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.7),
+    0 0 0 1px rgba(99, 102, 241, 0.1);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  z-index: 600;
+  overflow: hidden;
+  animation: perfDetailFadeIn 0.18s ease;
+}
+.perf-detail-popup.open { display: block; }
+
+@keyframes perfDetailFadeIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.perf-detail-section { padding: 14px 18px; }
+
+.perf-detail-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  margin-bottom: 10px;
+}
+.perf-detail-title span {
+  color: var(--brand-light);
+}
+
+.perf-detail-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  margin: 0;
+}
+
+.perf-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.perf-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.perf-detail-label {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  white-space: nowrap;
+}
+
+.perf-detail-val {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.perf-detail-val.perf-detail-big {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.perf-detail-val.pd-positive { color: var(--success); }
+.perf-detail-val.pd-negative { color: var(--danger); }
+.perf-detail-val.pd-warning  { color: var(--warning); }
 
 /* ── Layout ────────────────────────────────────────────────────────── */
 .dashboard {

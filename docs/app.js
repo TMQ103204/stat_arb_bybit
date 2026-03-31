@@ -1121,14 +1121,27 @@ const PERF_PERIODS = {
 
 let currentPerfStartMs = null; // null → backend uses PERF_DEFAULT_START_MS
 let currentPerfEndMs   = null; // null → no upper bound (preset buttons)
+let _activePerfPeriod  = "ALL";
+
+// ── Helpers ────────────────────────────────────────────────────────
+function _fmtUsdt(val) {
+  const v = Number(val);
+  if (isNaN(v)) return "—";
+  const sign = v >= 0 ? "+" : "";
+  return `${sign}$${v.toFixed(4)}`;
+}
+
+function _pnlColor(val) {
+  const v = Number(val);
+  if (isNaN(v) || v === 0) return "";
+  return v >= 0 ? "pd-positive" : "pd-negative";
+}
 
 // ── Data loader ────────────────────────────────────────────────────
 async function loadPerformance(startMs = null, endMs = null) {
   // ── Reset display so stale values never linger ─────────────────────
   const pctEl  = document.getElementById("perf-pct");
-  const cntEl  = document.getElementById("perf-count");
   if (pctEl) { pctEl.textContent = "—"; pctEl.className = "perf-value"; }
-  if (cntEl)   cntEl.textContent = "—";
 
   try {
     const params = [];
@@ -1142,16 +1155,80 @@ async function loadPerformance(startMs = null, endMs = null) {
     document.getElementById("perf-mode").textContent =
       modeMap[res.mode] || res.mode;
 
-    const pct = res.pnl_pct;
+    // ── Header: period-specific % ──────────────────────────────────
+    const pct = Number(res.period_pnl_pct) || 0;
     pctEl.textContent = (pct >= 0 ? "+" : "") + pct.toFixed(3) + "%";
     pctEl.className = "perf-value " + (pct >= 0 ? "perf-positive" : "perf-negative");
 
-    cntEl.textContent = res.pair_count;
-  } catch (e) { /* offline — "—" already shown */ }
+    // ── Detail popup data ──────────────────────────────────────────
+    // Account section
+    const scEl = document.getElementById("pd-starting-capital");
+    if (scEl) scEl.textContent = "$" + (Number(res.starting_capital) || 0).toFixed(4);
+    const wbEl = document.getElementById("pd-wallet-balance");
+    if (wbEl) wbEl.textContent = "$" + (Number(res.wallet_balance) || 0).toFixed(4);
+    const eqEl = document.getElementById("pd-equity");
+    if (eqEl) eqEl.textContent = "$" + (Number(res.current_equity) || 0).toFixed(4);
+
+    // PnL section (always all-time from wallet)
+    const allPct = Number(res.pnl_pct) || 0;
+    const tpEl = document.getElementById("pd-total-pnl");
+    if (tpEl) {
+      tpEl.textContent = _fmtUsdt(res.total_pnl) + ` (${allPct >= 0 ? "+" : ""}${allPct.toFixed(3)}%)`;
+      tpEl.className = "perf-detail-val perf-detail-big " + _pnlColor(res.total_pnl);
+    }
+    const rlEl = document.getElementById("pd-realized");
+    if (rlEl) {
+      rlEl.textContent = _fmtUsdt(res.cum_realised_pnl);
+      rlEl.className = "perf-detail-val " + _pnlColor(res.cum_realised_pnl);
+    }
+    const ulEl = document.getElementById("pd-unrealized");
+    if (ulEl) {
+      ulEl.textContent = _fmtUsdt(res.unrealised_pnl);
+      ulEl.className = "perf-detail-val " + _pnlColor(res.unrealised_pnl);
+    }
+
+    // Period breakdown section
+    const plEl = document.getElementById("pd-period-label");
+    if (plEl) plEl.textContent = _activePerfPeriod;
+
+    const trEl = document.getElementById("pd-trade-pnl");
+    if (trEl) {
+      trEl.textContent = _fmtUsdt(res.trade_pnl);
+      trEl.className = "perf-detail-val " + _pnlColor(res.trade_pnl);
+    }
+    const fdEl = document.getElementById("pd-funding");
+    if (fdEl) {
+      fdEl.textContent = _fmtUsdt(res.funding_fees);
+      fdEl.className = "perf-detail-val " + _pnlColor(res.funding_fees);
+    }
+    const feEl = document.getElementById("pd-fees");
+    if (feEl) {
+      feEl.textContent = _fmtUsdt(res.trading_fees);
+      feEl.className = "perf-detail-val pd-warning";  // fees always amber
+    }
+  } catch (e) { console.error("loadPerformance error:", e); /* "—" already shown */ }
 }
+
+// ── Detail popup toggle ───────────────────────────────────────────
+function togglePerfDetail() {
+  const popup = document.getElementById("perf-detail-popup");
+  if (!popup) return;
+  popup.classList.toggle("open");
+}
+
+// Close detail popup when clicking outside
+document.addEventListener("click", (e) => {
+  const popup = document.getElementById("perf-detail-popup");
+  const headerPerf = document.getElementById("header-perf");
+  if (popup && popup.classList.contains("open") &&
+      headerPerf && !headerPerf.contains(e.target)) {
+    popup.classList.remove("open");
+  }
+});
 
 // ── Period preset buttons ─────────────────────────────────────────
 function setPerfPeriod(period) {
+  _activePerfPeriod = period;
   document.querySelectorAll(".perf-period-btn").forEach((b) =>
     b.classList.remove("active")
   );
@@ -1231,7 +1308,9 @@ function selectCalDate(year, month, day) {
   // Update trigger label (DD/MM)
   const dd = String(day).padStart(2, "0");
   const mm = String(month).padStart(2, "0");
-  document.getElementById("perf-cal-label").textContent = `${dd}/${mm}/${year}`;
+  const dateLabel = `${dd}/${mm}/${year}`;
+  document.getElementById("perf-cal-label").textContent = dateLabel;
+  _activePerfPeriod = dateLabel;
 
   // Close panel
   document.getElementById("perf-cal-panel").classList.remove("open");

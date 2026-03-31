@@ -150,16 +150,11 @@
 
       <!-- ── P&L Performance (center) ── -->
       <div class="header-perf" id="header-perf">
-        <!-- Metrics row -->
-        <div class="perf-metrics-row">
+        <!-- Metrics row (clickable to open detail) -->
+        <div class="perf-metrics-row" id="perf-metrics-row" onclick="togglePerfDetail()" style="cursor:pointer" title="Click for detail">
           <div class="perf-item">
             <span class="perf-label">% Efficiency · <span id="perf-mode">—</span></span>
             <span class="perf-value" id="perf-pct">—</span>
-          </div>
-          <div class="perf-sep"></div>
-          <div class="perf-item">
-            <span class="perf-label">Closed Pairs</span>
-            <span class="perf-value" id="perf-count">—</span>
           </div>
         </div>
         <!-- Filter row -->
@@ -189,6 +184,62 @@
                 <span>Fr</span><span>Sa</span><span>Su</span>
               </div>
               <div class="perf-cal-days" id="perf-cal-days"></div>
+            </div>
+          </div>
+        </div>
+        <!-- Detail Dropdown Popup -->
+        <div class="perf-detail-popup" id="perf-detail-popup">
+          <div class="perf-detail-section">
+            <div class="perf-detail-title">Account</div>
+            <div class="perf-detail-grid">
+              <div class="perf-detail-item">
+                <span class="perf-detail-label">Starting Capital</span>
+                <span class="perf-detail-val" id="pd-starting-capital">—</span>
+              </div>
+              <div class="perf-detail-item">
+                <span class="perf-detail-label">Wallet Balance</span>
+                <span class="perf-detail-val" id="pd-wallet-balance">—</span>
+              </div>
+              <div class="perf-detail-item">
+                <span class="perf-detail-label">Current Equity</span>
+                <span class="perf-detail-val" id="pd-equity">—</span>
+              </div>
+            </div>
+          </div>
+          <div class="perf-detail-divider"></div>
+          <div class="perf-detail-section">
+            <div class="perf-detail-title">P&L (All-Time)</div>
+            <div class="perf-detail-grid">
+              <div class="perf-detail-item">
+                <span class="perf-detail-label">Total P&L</span>
+                <span class="perf-detail-val perf-detail-big" id="pd-total-pnl">—</span>
+              </div>
+              <div class="perf-detail-item">
+                <span class="perf-detail-label">Realized</span>
+                <span class="perf-detail-val" id="pd-realized">—</span>
+              </div>
+              <div class="perf-detail-item">
+                <span class="perf-detail-label">Unrealized</span>
+                <span class="perf-detail-val" id="pd-unrealized">—</span>
+              </div>
+            </div>
+          </div>
+          <div class="perf-detail-divider"></div>
+          <div class="perf-detail-section">
+            <div class="perf-detail-title">Period Breakdown · <span id="pd-period-label">ALL</span></div>
+            <div class="perf-detail-grid">
+              <div class="perf-detail-item">
+                <span class="perf-detail-label">Trade P&L</span>
+                <span class="perf-detail-val" id="pd-trade-pnl">—</span>
+              </div>
+              <div class="perf-detail-item">
+                <span class="perf-detail-label">Funding Fees</span>
+                <span class="perf-detail-val" id="pd-funding">—</span>
+              </div>
+              <div class="perf-detail-item">
+                <span class="perf-detail-label">Trading Fees</span>
+                <span class="perf-detail-val" id="pd-fees">—</span>
+              </div>
             </div>
           </div>
         </div>

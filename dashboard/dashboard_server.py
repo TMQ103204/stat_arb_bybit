@@ -1192,6 +1192,7 @@ def get_performance():
         funding_total = 0.0
         fee_total = 0.0
         trade_pnl = 0.0
+        period_pnl = 0.0  # net cash change in the filtered period
         try:
             all_txn_rows, _ = _fetch_transaction_log(session, PERF_START_MS)
             # Apply time filter
@@ -1203,6 +1204,8 @@ def get_performance():
                             if int(r.get("transactionTime", 0)) >= start_ms]
             for row in txn_rows:
                 txn_type = row.get("type", "")
+                # 'change' = net effect on cash balance per transaction
+                period_pnl += float(row.get("change", 0))
                 if txn_type == "TRADE":
                     trade_pnl += float(row.get("cashFlow", 0))
                     fee_total -= float(row.get("fee", 0))
@@ -1210,6 +1213,16 @@ def get_performance():
                     funding_total += float(row.get("funding", 0))
         except Exception:
             pass  # Non-fatal: breakdown is informational only
+
+        # Period-specific PnL %: when a period filter is used, show PnL for
+        # that period only (from transaction log 'change' sums), not all-time.
+        is_filtered = start_ms_param is not None
+        if is_filtered:
+            period_pnl_pct = (period_pnl / starting_capital * 100) if starting_capital > 0 else 0.0
+        else:
+            # No filter → show all-time from wallet balance (most accurate)
+            period_pnl = total_pnl
+            period_pnl_pct = pnl_pct
 
         # ══════════════════════════════════════════════════════════════
         # 3. CLOSED PNL — for pair count
@@ -1237,7 +1250,10 @@ def get_performance():
         return jsonify({
             "mode":              mode,
             "source":            "wallet_balance_api",
-            # Headline numbers (from wallet API — always accurate)
+            # Period-specific numbers (what the header shows)
+            "period_pnl":        round(period_pnl, 4),
+            "period_pnl_pct":    round(period_pnl_pct, 4),
+            # All-time numbers (from wallet API — always accurate)
             "total_pnl":         round(total_pnl, 4),
             "pnl_pct":           round(pnl_pct, 4),
             "starting_capital":  round(starting_capital, 4),
@@ -1245,11 +1261,11 @@ def get_performance():
             "wallet_balance":    round(wallet_balance, 4),
             "unrealised_pnl":    round(unrealised_pnl, 4),
             "cum_realised_pnl":  round(cum_realised_pnl, 4),
-            # Breakdown (from transaction log — informational)
+            # Breakdown (from transaction log — period-filtered)
             "trade_pnl":         round(trade_pnl, 4),
             "funding_fees":      round(funding_total, 4),
             "trading_fees":      round(fee_total, 4),
-            # Pair count (from closedPnl)
+            # Pair count (from closedPnl — period-filtered)
             "pair_count":        pair_count,
             "filter_ms":         start_ms,
         })
