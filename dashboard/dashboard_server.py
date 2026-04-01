@@ -1297,4 +1297,10 @@ if __name__ == "__main__":
     print(f"🚀 Dashboard server starting...")
     print(f"   Project root: {BASE_DIR}")
     print(f"   Open http://localhost:5000 in your browser")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=True,
+        extra_files=[],
+        exclude_patterns=["*/site-packages/*", "*/Lib/*", "*/__pycache__/*"],
+    )
