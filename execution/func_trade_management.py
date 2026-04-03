@@ -408,20 +408,37 @@ def manage_new_trades(kill_switch):
                     session_private.cancel_all_orders(category="linear", symbol=signal_negative_ticker)
 
                     # ── Half-position guard ────────────────────────────────────────────────
-                    # If one leg already filled but the other didn't, we have an unhedged
-                    # position. Close everything immediately rather than entering HOLDING.
-                    long_has_pos  = order_status_long  in ("Trade Complete", "Position Filled")
-                    short_has_pos = order_status_short in ("Trade Complete", "Position Filled")
-                    if long_has_pos or short_has_pos:
-                        logger.critical(
-                            "HALF-POSITION DETECTED on z-score exit: long=%s short=%s. "
-                            "Closing all positions to avoid unhedged exposure.",
-                            order_status_long, order_status_short
-                        )
-                        time.sleep(3)  # let Bybit register the fill before querying size
-                        close_all_positions(kill_switch)
-                        kill_switch = 2  # signal main loop to handle auto_trade + circuit breaker
-                        return kill_switch, signal_side, entry_hedge_ratio, entry_mean, entry_std
+                    # BUG FIX: order_status_long/short may still be "" if z-score dropped
+                    # before any check_order() call was made (first monitoring tick).
+                    # Query ACTUAL positions on the exchange instead of relying on stale
+                    # order_status variables.
+                    from func_position_calls import open_position_confirmation
+                    time.sleep(1)  # let cancellation register on exchange
+                    actual_long_open = open_position_confirmation(long_ticker)
+                    actual_short_open = open_position_confirmation(short_ticker)
+
+                    if actual_long_open or actual_short_open:
+                        if not (actual_long_open and actual_short_open):
+                            # Only one leg filled — unhedged exposure!
+                            orphan = long_ticker if actual_long_open else short_ticker
+                            logger.critical(
+                                "HALF-POSITION DETECTED on z-score exit: %s has position "
+                                "but other leg does not. "
+                                "Closing all positions to avoid unhedged exposure.",
+                                orphan
+                            )
+                            time.sleep(3)  # let Bybit register the fill before querying size
+                            close_all_positions(kill_switch)
+                            kill_switch = 2  # signal main loop to handle auto_trade + circuit breaker
+                            return kill_switch, signal_side, entry_hedge_ratio, entry_mean, entry_std
+                        else:
+                            # Both legs filled — safe to enter HOLDING
+                            logger.info(
+                                "Both legs already filled despite z-score dropout. "
+                                "Entering HOLDING."
+                            )
+                            kill_switch = 1
+                            return kill_switch, signal_side, entry_hedge_ratio, entry_mean, entry_std
                     # ──────────────────────────────────────────────────────────────────────
 
                     kill_switch = 1
