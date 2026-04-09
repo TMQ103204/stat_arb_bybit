@@ -32,7 +32,15 @@ from bybit_response import get_result_list, get_ret_code
 
 logger = get_logger("reset_bot")
 
-SYMBOLS = [signal_positive_ticker, signal_negative_ticker]
+SYMBOLS = [s for s in [signal_positive_ticker, signal_negative_ticker] if s.strip()]
+
+if not SYMBOLS:
+    logger.error("No valid tickers configured — nothing to reset.")
+    print("ERROR: Both tickers are empty. Set at least one ticker in config_execution_api.py")
+    sys.exit(1)
+
+if len(SYMBOLS) < 2:
+    logger.warning("Only one ticker configured (%s). The other ticker is blank.", SYMBOLS[0])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers

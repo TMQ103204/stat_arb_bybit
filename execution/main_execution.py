@@ -48,6 +48,21 @@ if __name__ == "__main__":
         sys.exit(0 if ok else 1)
     # ─────────────────────────────────────────────────────────────────────────
 
+    # ── Validate both tickers are configured ─────────────────────────────────
+    if not signal_positive_ticker or not signal_positive_ticker.strip():
+        logger.critical("signal_positive_ticker (ticker_2) is EMPTY. "
+                        "Stat arb requires two tickers. Set ticker_2 in config_execution_api.py")
+        print("\n❌ ERROR: ticker_2 is empty in config_execution_api.py")
+        print("   Stat arb bot needs TWO tickers to trade. Exiting.\n")
+        sys.exit(1)
+    if not signal_negative_ticker or not signal_negative_ticker.strip():
+        logger.critical("signal_negative_ticker (ticker_1) is EMPTY. "
+                        "Stat arb requires two tickers. Set ticker_1 in config_execution_api.py")
+        print("\n❌ ERROR: ticker_1 is empty in config_execution_api.py")
+        print("   Stat arb bot needs TWO tickers to trade. Exiting.\n")
+        sys.exit(1)
+    # ─────────────────────────────────────────────────────────────────────────
+
     # Initial printout
     logger.info("StatBot initiated...")
 
