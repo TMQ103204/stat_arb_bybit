@@ -314,8 +314,15 @@ def run_advanced_filters(series_1, series_2, spread, sym_1, sym_2, funding_rates
         timeframe_hours=timeframe_hours,
     )
 
+    # ── pct_per_zscore: how much % profit does 1 z-score move represent? ──
+    # This explains why some pairs with z=1 are very profitable while others
+    # with z=4 barely break even. High pct_per_zscore = each z-score is "worth more".
+    spread_series = pd.Series(spread_array)
+    rolling_std = spread_series.rolling(window=z_score_window).std().iloc[-1]
+    pct_per_zscore = round((rolling_std / avg_price_1) * 100, 4) if avg_price_1 > 0 else 0.0
+
     return (half_life, hurst, is_stable, win_rate, total_trades,
-            avg_net_profit, profit_factor, net_funding_rate)
+            avg_net_profit, profit_factor, net_funding_rate, pct_per_zscore)
 
 
 # Put close prices into a list
@@ -393,7 +400,8 @@ def get_cointegrated_pairs(prices):
 
             # STEP 2: Advanced filters WITH realistic backtest
             (half_life, hurst, is_stable, win_rate, total_trades,
-             avg_net_profit, profit_factor, net_funding_rate) = run_advanced_filters(
+             avg_net_profit, profit_factor, net_funding_rate,
+             pct_per_zscore) = run_advanced_filters(
                 series_1, series_2, basic["spread"], sym_1, sym_2, funding_rates
             )
 
@@ -414,6 +422,7 @@ def get_cointegrated_pairs(prices):
                 "avg_net_profit": avg_net_profit,
                 "profit_factor": profit_factor,
                 "net_funding_rate": round(net_funding_rate, 6),
+                "pct_per_zscore": pct_per_zscore,
             })
 
     print(f"Done: {checked} pairs checked, {basic_pass} passed basic, "
@@ -522,6 +531,7 @@ def get_cointegrated_pairs(prices):
             top = df_coint.iloc[0]
             print(f"  #1: {top['sym_1']} / {top['sym_2']}")
             print(f"      avg_net_profit: {top['avg_net_profit']:.4f}%")
+            print(f"      pct_per_zscore: {top['pct_per_zscore']:.4f}% (profit per 1σ move)")
             print(f"      win_rate: {top['win_rate']:.0%}")
             print(f"      profit_factor: {top['profit_factor']:.2f}")
             print(f"      half_life: {top['half_life']:.1f}h")
