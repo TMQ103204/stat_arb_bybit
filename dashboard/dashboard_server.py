@@ -3,6 +3,9 @@ Stat-Arb Trading Dashboard – Backend API Server
 Flask server providing REST APIs for the trading dashboard.
 """
 
+import gevent.monkey
+gevent.monkey.patch_all()
+
 import os
 import sys
 import json
@@ -16,6 +19,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
+from flask_socketio import SocketIO
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent.parent  # project root
@@ -31,10 +35,13 @@ COINTEGRATED_CSV = STRATEGY_DIR / "2_cointegrated_pairs.csv"
 BACKTEST_CSV = STRATEGY_DIR / "3_backtest_file.csv"
 PRICE_JSON = STRATEGY_DIR / "1_price_list.json"
 STATUS_JSON = EXECUTION_DIR / "status.json"
+PORTFOLIO_STATUS_JSON = EXECUTION_DIR / "status_portfolio.json"
+PORTFOLIO_CONFIG = EXECUTION_DIR / "portfolio_config.py"
 
 # ── App ──────────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=str(DASHBOARD_DIR))
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="gevent")
 
 # ── Process tracking ─────────────────────────────────────────────────────────
 strategy_process = None
@@ -235,13 +242,11 @@ def stream_process_output(proc, output_list, lock):
 
 
 def kill_all_bot_processes():
-    """Kill ALL running main_execution.py processes system-wide (not just dashboard-spawned ones).
-    This prevents the 'dual bot' problem where a process started from a terminal
-    and one from the dashboard both write to the same bot.log simultaneously."""
+    """Kill ALL running main_execution.py AND main_portfolio.py processes system-wide."""
     import subprocess as _sp
     killed = []
+    targets = ["main_execution.py", "main_portfolio.py"]
     try:
-        # Use tasklist on Windows / ps on Unix to find all python processes
         if sys.platform == "win32":
             result = _sp.run(
                 ["wmic", "process", "where",
@@ -249,7 +254,7 @@ def kill_all_bot_processes():
                 capture_output=True, text=True
             )
             for line in result.stdout.splitlines():
-                if "main_execution.py" in line:
+                if any(t in line for t in targets):
                     parts = line.strip().split()
                     pid = int(parts[-1])
                     try:
@@ -259,14 +264,15 @@ def kill_all_bot_processes():
                     except Exception:
                         pass
         else:
-            result = _sp.run(["pgrep", "-f", "main_execution.py"],
-                             capture_output=True, text=True)
-            for pid_str in result.stdout.splitlines():
-                try:
-                    os.kill(int(pid_str), signal.SIGTERM)
-                    killed.append(int(pid_str))
-                except Exception:
-                    pass
+            for target in targets:
+                result = _sp.run(["pgrep", "-f", target],
+                                 capture_output=True, text=True)
+                for pid_str in result.stdout.splitlines():
+                    try:
+                        os.kill(int(pid_str), signal.SIGTERM)
+                        killed.append(int(pid_str))
+                    except Exception:
+                        pass
     except Exception as e:
         print(f"kill_all_bot_processes error: {e}")
     return killed
@@ -312,6 +318,36 @@ def set_execution_config():
         return jsonify({"error": str(e)}), 500
 
 
+# ── Trade Mode persistence ─────────────────────────────────────────────────────
+TRADE_MODE_FILE = BASE_DIR / "dashboard" / "trade_mode.json"
+
+
+@app.route("/api/config/trade-mode", methods=["GET"])
+def get_trade_mode():
+    """Return the persisted trade mode (single/multi)."""
+    try:
+        if TRADE_MODE_FILE.exists():
+            data = json.loads(TRADE_MODE_FILE.read_text(encoding="utf-8"))
+            return jsonify({"trade_mode": data.get("trade_mode", "single")})
+    except Exception:
+        pass
+    return jsonify({"trade_mode": "single"})
+
+
+@app.route("/api/config/trade-mode", methods=["POST"])
+def set_trade_mode():
+    """Persist the selected trade mode."""
+    data = request.json or {}
+    mode = data.get("trade_mode", "single")
+    if mode not in ("single", "multi"):
+        return jsonify({"error": "Invalid trade_mode"}), 400
+    try:
+        TRADE_MODE_FILE.write_text(json.dumps({"trade_mode": mode}), encoding="utf-8")
+        return jsonify({"status": "saved", "trade_mode": mode})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ROUTES – Strategy
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -353,17 +389,29 @@ def strategy_status():
 @app.route("/api/execution/start", methods=["POST"])
 def start_execution():
     global execution_process, execution_output
-    # Kill ALL stray main_execution.py processes first (including those
-    # started from an external terminal) to prevent dual-bot log pollution.
     killed = kill_all_bot_processes()
+
+    # Determine which script to launch based on trade_mode from frontend
+    data = request.json or {}
+    trade_mode = data.get("trade_mode", "single")
+    cfg = parse_execution_config()
+    current_mode = cfg.get("mode", "demo")
+
+    if trade_mode == "multi":
+        script = EXECUTION_DIR / "main_portfolio.py"
+        label = "multi-pair portfolio bot"
+    else:
+        script = EXECUTION_DIR / "main_execution.py"
+        label = "single-pair execution bot"
+
     with execution_lock:
         execution_output = []
         if killed:
-            execution_output.append(f"⚠️ Killed {len(killed)} stray bot process(es): {killed}")
-        execution_output.append("▶ Starting execution bot...")
+            execution_output.append(f"\u26a0\ufe0f Killed {len(killed)} stray bot process(es): {killed}")
+        execution_output.append(f"\u25b6 Starting {label} ({current_mode} mode)...")
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
     proc = subprocess.Popen(
-        [sys.executable, "-u", str(EXECUTION_DIR / "main_execution.py")],
+        [sys.executable, "-u", str(script)],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace",
         cwd=str(EXECUTION_DIR), env=env,
@@ -372,7 +420,8 @@ def start_execution():
     execution_process = proc
     t = threading.Thread(target=stream_process_output, args=(proc, execution_output, execution_lock), daemon=True)
     t.start()
-    return jsonify({"status": "started", "pid": proc.pid, "killed_pids": killed})
+    return jsonify({"status": "started", "pid": proc.pid, "mode": current_mode,
+                    "script": script.name, "killed_pids": killed})
 
 
 @app.route("/api/execution/stop", methods=["POST"])
@@ -392,20 +441,70 @@ def stop_execution():
 
 @app.route("/api/execution/reset", methods=["POST"])
 def reset_execution():
-    """Cancel all open orders and close all positions for the configured pair.
-    Automatically stops the bot first (if running), then runs reset_bot.py,
-    and returns whether the account ended up clean."""
+    """Cancel all open orders and close all positions for ALL configured pairs.
+    Handles both single-pair (reset_bot.py) and multi-pair (portfolio) modes.
+    Automatically stops the bot first (if running)."""
     global execution_process, execution_output
 
-    # Kill ALL stray main_execution.py processes (not just dashboard-spawned ones)
+    # Kill ALL stray bot processes
     killed = kill_all_bot_processes()
 
     with execution_lock:
         execution_output = []
         if killed:
             execution_output.append(f"⏹ Killed {len(killed)} bot process(es): {killed}")
-        execution_output.append("🔄 Resetting — cancelling orders and closing positions...")
+        execution_output.append("🔄 Resetting — cancelling orders and closing ALL positions...")
 
+    # ── Close ALL open positions on Bybit (nuclear reset) ──────────────
+    portfolio_closed = []
+    try:
+        import sys as _sys
+        if str(EXECUTION_DIR) not in _sys.path:
+            _sys.path.insert(0, str(EXECUTION_DIR))
+        if str(BASE_DIR) not in _sys.path:
+            _sys.path.insert(0, str(BASE_DIR))
+
+        from portfolio_config import create_sessions, MODE
+        session_pub, session_priv, retry_fn = create_sessions(MODE)
+
+        # Get ALL open positions from Bybit (not just config pairs)
+        pos_response = retry_fn(session_priv.get_positions,
+                                category="linear", settleCoin="USDT")
+        from bybit_response import get_result_list, get_ret_code
+        if get_ret_code(pos_response) == 0:
+            positions = get_result_list(pos_response)
+            for pos in positions:
+                size = float(pos.get("size", 0))
+                if size > 0:
+                    ticker = pos["symbol"]
+                    side = pos["side"]
+                    close_side = "Sell" if side == "Buy" else "Buy"
+                    try:
+                        # Cancel any open orders first
+                        session_priv.cancel_all_orders(category="linear", symbol=ticker)
+                        import time; time.sleep(0.2)
+                        # Close position
+                        session_priv.place_order(
+                            category="linear", symbol=ticker,
+                            side=close_side, orderType="Market",
+                            qty=str(size), timeInForce="GTC", reduceOnly=True,
+                        )
+                        portfolio_closed.append(ticker)
+                        with execution_lock:
+                            execution_output.append(
+                                f"  ✅ Closed {close_side} {ticker} qty={size}")
+                    except Exception as ex:
+                        with execution_lock:
+                            execution_output.append(f"  ⚠️ Failed to close {ticker}: {ex}")
+                    import time; time.sleep(0.3)
+        else:
+            with execution_lock:
+                execution_output.append("⚠️ Cannot fetch positions from Bybit")
+    except Exception as ex:
+        with execution_lock:
+            execution_output.append(f"⚠️ Portfolio close error: {ex}")
+
+    # ── Legacy single-pair: run reset_bot.py ─────────────────────────────
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
     try:
         result = subprocess.run(
@@ -424,12 +523,29 @@ def reset_execution():
 
         clean = result.returncode == 0
         status = "clean" if clean else "failed"
+
+        # ── Clean up stale status files so UI reflects reset ──────────
+        try:
+            for sf in EXECUTION_DIR.glob("status_*.json"):
+                sf.unlink()
+            status_file = EXECUTION_DIR / "status.json"
+            if status_file.exists():
+                status_file.write_text('{"message": "Reset — account clean"}', encoding="utf-8")
+            # Also clean up any command signal files
+            for cf in EXECUTION_DIR.glob("cmd_*.json"):
+                cf.unlink()
+        except Exception:
+            pass
+
         with execution_lock:
+            if portfolio_closed:
+                execution_output.append(f"✅ Portfolio reset: closed {len(portfolio_closed)} positions: {', '.join(portfolio_closed)}")
             execution_output.append(
                 "✅ Reset complete — account is CLEAN. You can now Start the bot." if clean
                 else "⚠️ Reset finished with warnings. Check logs."
             )
-        return jsonify({"status": status, "output": lines, "clean": clean})
+        return jsonify({"status": status, "output": lines, "clean": clean,
+                        "portfolio_closed": portfolio_closed})
     except subprocess.TimeoutExpired:
         with execution_lock:
             execution_output.append("⏱ Reset timed out after 60s.")
@@ -1279,6 +1395,542 @@ def get_performance():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# ROUTES – Portfolio (Multi-Pair)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/portfolio/status", methods=["GET"])
+def get_portfolio_status():
+    """Return portfolio-level status + all per-pair statuses."""
+    data = {"portfolio": {}, "pairs": []}
+    # Read aggregate portfolio status
+    try:
+        if PORTFOLIO_STATUS_JSON.exists():
+            data["portfolio"] = json.loads(PORTFOLIO_STATUS_JSON.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    # Read per-pair status files
+    try:
+        for f in EXECUTION_DIR.glob("status_*.json"):
+            if f.name == "status_portfolio.json" or f.name == "status.json":
+                continue
+            try:
+                pair_data = json.loads(f.read_text(encoding="utf-8"))
+                data["pairs"].append(pair_data)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return jsonify(data)
+
+
+@app.route("/api/portfolio/pairs", methods=["GET"])
+def get_portfolio_pairs():
+    """Read ACTIVE_PAIRS from portfolio_config.py and return as JSON."""
+    try:
+        if not PORTFOLIO_CONFIG.exists():
+            return jsonify({"pairs": [], "error": "portfolio_config.py not found"}), 404
+        content = PORTFOLIO_CONFIG.read_text(encoding="utf-8")
+        # Parse PairConfig entries from the Python source
+        pairs = _parse_portfolio_config_pairs(content)
+        return jsonify({"pairs": pairs})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/portfolio/full", methods=["GET"])
+def get_portfolio_full():
+    """Single endpoint: config pairs + live status + portfolio overview.
+    Merges everything the UI needs in ONE call instead of two."""
+    result = {"config_pairs": [], "live_pairs": [], "portfolio": {}}
+    # 1. Config pairs
+    try:
+        if PORTFOLIO_CONFIG.exists():
+            content = PORTFOLIO_CONFIG.read_text(encoding="utf-8")
+            result["config_pairs"] = _parse_portfolio_config_pairs(content)
+            
+            # Extract auto_rotation status
+            import re as _re
+            match = _re.search(r'^AUTO_ROTATION_ENABLED\s*=\s*(True|False)', content, _re.MULTILINE)
+            if match:
+                result["auto_rotation"] = match.group(1) == "True"
+    except Exception:
+        pass
+    # 2. Live status
+    try:
+        if PORTFOLIO_STATUS_JSON.exists():
+            result["portfolio"] = json.loads(PORTFOLIO_STATUS_JSON.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    try:
+        for f in EXECUTION_DIR.glob("status_*.json"):
+            if f.name in ("status_portfolio.json", "status.json"):
+                continue
+            try:
+                result["live_pairs"].append(json.loads(f.read_text(encoding="utf-8")))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return jsonify(result)
+
+
+@app.route("/api/portfolio/toggle-rotation", methods=["POST"])
+def toggle_portfolio_rotation():
+    """Toggle AUTO_ROTATION_ENABLED in portfolio_config.py"""
+    try:
+        import re as _re
+        content = PORTFOLIO_CONFIG.read_text(encoding="utf-8")
+        
+        match = _re.search(r'^AUTO_ROTATION_ENABLED\s*=\s*(True|False)', content, _re.MULTILINE)
+        if not match:
+            return jsonify({"error": "Cannot find AUTO_ROTATION_ENABLED in config"}), 500
+            
+        current = match.group(1) == "True"
+        new_val = not current
+        new_str = "True" if new_val else "False"
+        
+        new_content = content[:match.start(1)] + new_str + content[match.end(1):]
+        PORTFOLIO_CONFIG.write_text(new_content, encoding="utf-8")
+        
+        return jsonify({"status": "success", "auto_rotation": new_val})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/portfolio/pair-log", methods=["GET"])
+def get_pair_log():
+    """Return last N log lines for a specific pair from bot.log."""
+    pair_id = request.args.get("pair_id", "")
+    limit = min(int(request.args.get("limit", "200")), 500)
+    if not pair_id:
+        return jsonify({"error": "pair_id required"}), 400
+
+    log_file = EXECUTION_DIR / "bot.log"
+    if not log_file.exists():
+        return jsonify({"lines": [], "count": 0})
+
+    # Filter lines containing the pair logger name
+    filter_key = f"pair_{pair_id}"
+    try:
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            # Read from end efficiently (deque with maxlen)
+            from collections import deque
+            all_matching = deque(maxlen=limit)
+            for line in f:
+                if filter_key in line:
+                    all_matching.append(line.rstrip("\n"))
+        return jsonify({"lines": list(all_matching), "count": len(all_matching)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/portfolio/add-pair", methods=["POST"])
+def add_portfolio_pair():
+    """Add a new pair to ACTIVE_PAIRS in portfolio_config.py."""
+    try:
+        data = request.json
+        required = ["pair_id", "ticker_1", "ticker_2",
+                     "signal_positive_ticker", "signal_negative_ticker"]
+        for key in required:
+            if key not in data or not data[key]:
+                return jsonify({"error": f"Missing required field: {key}"}), 400
+
+        # Check for ticker overlap with existing pairs
+        content = PORTFOLIO_CONFIG.read_text(encoding="utf-8")
+        existing_pairs = _parse_portfolio_config_pairs(content)
+        new_tickers = {data["ticker_1"], data["ticker_2"]}
+        for ep in existing_pairs:
+            existing_tickers = {ep.get("ticker_1", ""), ep.get("ticker_2", "")}
+            overlap = new_tickers & existing_tickers
+            if overlap:
+                return jsonify({
+                    "error": f"Ticker overlap: {', '.join(overlap)} already used by pair '{ep.get('pair_id')}'. "
+                             f"Shared tickers cause position conflicts. Choose pairs with unique tokens."
+                }), 409
+
+        # Check duplicate pair_id
+        if any(ep.get("pair_id") == data["pair_id"] for ep in existing_pairs):
+            return jsonify({"error": f"Pair '{data['pair_id']}' already exists"}), 409
+
+        # Build PairConfig code string
+        pair_code = _build_pair_config_code(data)
+
+        # Read current config and insert before the closing bracket of ACTIVE_PAIRS
+        content = PORTFOLIO_CONFIG.read_text(encoding="utf-8")
+
+        # Find ACTIVE_PAIRS = [ and its matching ]
+        import re as _re
+        match = _re.search(r'^ACTIVE_PAIRS\s*=\s*\[', content, _re.MULTILINE)
+        if not match:
+            return jsonify({"error": "Cannot find ACTIVE_PAIRS in portfolio_config.py"}), 500
+
+        # Find matching ] using bracket depth counting
+        bracket_start = match.end()
+        depth = 1
+        idx = bracket_start
+        while idx < len(content) and depth > 0:
+            if content[idx] == '[':
+                depth += 1
+            elif content[idx] == ']':
+                depth -= 1
+            idx += 1
+        closing_bracket_idx = idx - 1  # points to the ]
+
+        # Insert new pair code before the closing ]
+        new_content = content[:closing_bracket_idx] + pair_code + "\n" + content[closing_bracket_idx:]
+        PORTFOLIO_CONFIG.write_text(new_content, encoding="utf-8")
+
+        return jsonify({"status": "added", "pair_id": data["pair_id"]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/portfolio/edit-pair", methods=["POST"])
+def edit_portfolio_pair():
+    """Edit an existing pair's config in portfolio_config.py.
+    
+    Strategy: find old PairConfig block by pair_id, replace it with new one.
+    Only allowed when pair is NOT in HOLDING state (kill_switch != 1).
+    """
+    try:
+        data = request.json
+        pair_id = data.get("pair_id", "")
+        if not pair_id:
+            return jsonify({"error": "Missing pair_id"}), 400
+
+        # Check if pair is currently holding a position
+        status_file = EXECUTION_DIR / f"status_{pair_id}.json"
+        if status_file.exists():
+            try:
+                st = json.loads(status_file.read_text(encoding="utf-8"))
+                if st.get("kill_switch") == 1:
+                    return jsonify({"error": f"Pair '{pair_id}' is HOLDING a position — cannot edit while in trade"}), 409
+            except Exception:
+                pass
+
+        content = PORTFOLIO_CONFIG.read_text(encoding="utf-8")
+
+        # Find the PairConfig block for this pair_id
+        import re as _re
+        pair_id_pattern = _re.compile(
+            r'pair_id\s*=\s*["\']' + _re.escape(pair_id) + r'["\']'
+        )
+        match = pair_id_pattern.search(content)
+        if not match:
+            return jsonify({"error": f"Pair '{pair_id}' not found in config"}), 404
+
+        # Walk backwards to find "PairConfig("
+        pos = match.start()
+        block_start = content.rfind("PairConfig(", 0, pos)
+        if block_start == -1:
+            return jsonify({"error": f"Cannot find PairConfig block for '{pair_id}'"}), 500
+
+        # Include leading whitespace
+        line_start = content.rfind("\n", 0, block_start)
+        if line_start == -1:
+            line_start = 0
+        else:
+            line_start += 1
+
+        # Walk forward to find matching )
+        paren_start = content.index("(", block_start)
+        depth = 1
+        idx = paren_start + 1
+        while idx < len(content) and depth > 0:
+            if content[idx] == '(':
+                depth += 1
+            elif content[idx] == ')':
+                depth -= 1
+            idx += 1
+        block_end = idx  # just past the )
+
+        # Include trailing comma and newline
+        rest = content[block_end:]
+        trail = 0
+        if rest.startswith(","):
+            trail += 1
+        while trail < len(rest) and rest[trail] in (" ", "\t"):
+            trail += 1
+        if trail < len(rest) and rest[trail] == "\r":
+            trail += 1
+        if trail < len(rest) and rest[trail] == "\n":
+            trail += 1
+
+        # Build new PairConfig code
+        pair_code = _build_pair_config_code(data)
+
+        # Replace old block with new
+        new_content = content[:line_start] + pair_code + "\n" + content[block_end + trail:]
+        PORTFOLIO_CONFIG.write_text(new_content, encoding="utf-8")
+
+        return jsonify({"status": "updated", "pair_id": pair_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/portfolio/remove-pair", methods=["POST"])
+def remove_portfolio_pair():
+    """Remove a pair from ACTIVE_PAIRS by pair_id."""
+    try:
+        data = request.json
+        pair_id = data.get("pair_id", "")
+        if not pair_id:
+            return jsonify({"error": "Missing pair_id"}), 400
+
+        content = PORTFOLIO_CONFIG.read_text(encoding="utf-8")
+
+        # Find the PairConfig block containing this pair_id using bracket matching
+        import re as _re
+        
+        # Find all PairConfig( occurrences (uncommented)
+        found = False
+        new_content = content
+        
+        # Find pair_id="XXX" in the content
+        pair_id_pattern = _re.compile(
+            r'pair_id\s*=\s*["\']' + _re.escape(pair_id) + r'["\']'
+        )
+        match = pair_id_pattern.search(content)
+        if not match:
+            return jsonify({"error": f"Pair '{pair_id}' not found in config"}), 404
+
+        # Walk backwards from pair_id to find "PairConfig("
+        pos = match.start()
+        block_start = content.rfind("PairConfig(", 0, pos)
+        if block_start == -1:
+            return jsonify({"error": f"Cannot find PairConfig block for '{pair_id}'"}), 500
+
+        # Include leading whitespace
+        line_start = content.rfind("\n", 0, block_start)
+        if line_start == -1:
+            line_start = 0
+        else:
+            line_start += 1  # skip the \n itself
+
+        # Walk forward from PairConfig( to find matching )
+        paren_start = content.index("(", block_start)
+        depth = 1
+        idx = paren_start + 1
+        while idx < len(content) and depth > 0:
+            if content[idx] == '(':
+                depth += 1
+            elif content[idx] == ')':
+                depth -= 1
+            idx += 1
+        block_end = idx  # just past the )
+
+        # Include trailing comma and newline
+        rest = content[block_end:]
+        trail = 0
+        if rest.startswith(","):
+            trail += 1
+        # Skip trailing whitespace and newline
+        while trail < len(rest) and rest[trail] in (" ", "\t"):
+            trail += 1
+        if trail < len(rest) and rest[trail] == "\r":
+            trail += 1
+        if trail < len(rest) and rest[trail] == "\n":
+            trail += 1
+
+        new_content = content[:line_start] + content[block_end + trail:]
+        
+        PORTFOLIO_CONFIG.write_text(new_content, encoding="utf-8")
+
+        # Also remove per-pair status file
+        status_file = EXECUTION_DIR / f"status_{pair_id}.json"
+        if status_file.exists():
+            status_file.unlink()
+
+        return jsonify({"status": "removed", "pair_id": pair_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/portfolio/close-pair", methods=["POST"])
+def close_portfolio_pair():
+    """Close positions for a pair directly on Bybit + signal running bot to stop."""
+    try:
+        data = request.json
+        pair_id = data.get("pair_id", "")
+        if not pair_id:
+            return jsonify({"error": "Missing pair_id"}), 400
+
+        # Get ticker info for this pair from config
+        content = PORTFOLIO_CONFIG.read_text(encoding="utf-8")
+        pairs = _parse_portfolio_config_pairs(content)
+        pair_info = next((p for p in pairs if p.get("pair_id") == pair_id), None)
+
+        if not pair_info:
+            return jsonify({"error": f"Pair '{pair_id}' not found in config"}), 404
+
+        ticker_1 = pair_info.get("ticker_1", "")
+        ticker_2 = pair_info.get("ticker_2", "")
+
+        if not ticker_1 or not ticker_2:
+            return jsonify({"error": "Missing ticker info"}), 400
+
+        # Signal running bot to stop this pair's trader
+        cmd_file = EXECUTION_DIR / f"cmd_{pair_id}.json"
+        cmd_file.write_text(json.dumps({"action": "close"}), encoding="utf-8")
+
+        # Directly close positions on Bybit (works even if bot isn't running)
+        import threading
+        def _close_on_bybit():
+            try:
+                import sys as _sys
+                if str(EXECUTION_DIR) not in _sys.path:
+                    _sys.path.insert(0, str(EXECUTION_DIR))
+                if str(BASE_DIR) not in _sys.path:
+                    _sys.path.insert(0, str(BASE_DIR))
+
+                from portfolio_config import create_sessions, MODE
+                session_pub, session_priv, retry_fn = create_sessions(MODE)
+
+                from func_close_positions import close_all_positions
+                close_all_positions(
+                    kill_switch=1,
+                    pos_ticker=ticker_1,
+                    neg_ticker=ticker_2,
+                    session_priv=session_priv,
+                    retry_fn=retry_fn,
+                )
+                app.logger.info("Closed positions for %s on Bybit", pair_id)
+
+                # Clean up status file so UI updates immediately
+                status_file = EXECUTION_DIR / f"status_{pair_id}.json"
+                if status_file.exists():
+                    status_file.unlink()
+                # Also update status_portfolio.json if it exists
+                portfolio_status_file = EXECUTION_DIR / "status_portfolio.json"
+                if portfolio_status_file.exists():
+                    try:
+                        pdata = json.loads(portfolio_status_file.read_text(encoding="utf-8"))
+                        if "pairs" in pdata:
+                            pdata["pairs"] = [p for p in pdata["pairs"] if p.get("pair_id") != pair_id]
+                            portfolio_status_file.write_text(json.dumps(pdata), encoding="utf-8")
+                    except Exception:
+                        pass
+            except Exception as ex:
+                app.logger.error("Failed to close %s on Bybit: %s", pair_id, ex)
+
+        threading.Thread(target=_close_on_bybit, daemon=True).start()
+
+        return jsonify({"status": "closing", "pair_id": pair_id,
+                        "message": f"Closing {ticker_1} + {ticker_2} on Bybit..."})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/portfolio/pause-pair", methods=["POST"])
+def pause_portfolio_pair():
+    """Send 'pause' command to a running PairTrader (stop seeking, no close)."""
+    try:
+        data = request.json
+        pair_id = data.get("pair_id", "")
+        if not pair_id:
+            return jsonify({"error": "Missing pair_id"}), 400
+
+        cmd_file = EXECUTION_DIR / f"cmd_{pair_id}.json"
+        cmd_file.write_text(json.dumps({"action": "pause"}), encoding="utf-8")
+        return jsonify({"status": "command_sent", "action": "pause", "pair_id": pair_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+def _parse_portfolio_config_pairs(content):
+    """Parse PairConfig entries from portfolio_config.py source text.
+    
+    Only parses UNCOMMENTED PairConfig blocks — lines starting with # are stripped.
+    """
+    import re as _re
+    pairs = []
+    
+    # Strip commented lines first so examples don't get matched
+    clean_lines = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        clean_lines.append(line)
+    clean_content = "\n".join(clean_lines)
+    
+    # Find all PairConfig blocks in uncommented code
+    blocks = _re.finditer(
+        r'PairConfig\((.*?)\)', clean_content, _re.DOTALL
+    )
+    for block in blocks:
+        block_text = block.group(1)
+        pair = {}
+        # Extract key=value pairs
+        for match in _re.finditer(r'(\w+)\s*=\s*([^,\n]+)', block_text):
+            key = match.group(1)
+            value = match.group(2).strip().strip("'\"")
+            # Convert types
+            if value in ("True", "False"):
+                pair[key] = value == "True"
+            else:
+                try:
+                    pair[key] = int(value)
+                except ValueError:
+                    try:
+                        pair[key] = float(value)
+                    except ValueError:
+                        pair[key] = value
+        if pair.get("pair_id"):
+            pairs.append(pair)
+    return pairs
+
+
+def _build_pair_config_code(data):
+    """Generate PairConfig(...) Python code from a dict."""
+    defaults = {
+        "allocated_capital": 10, "leverage": 2,
+        "signal_trigger_thresh": 1.1, "exit_threshold": 0.0,
+        "custom_thresholds": True, "zscore_stop_loss": 10,
+        "stop_loss_fail_safe": 0, "auto_trade": True,
+        "time_stop_loss_hours": 48, "max_session_loss_pct": 10.0,
+        "limit_order_basis": True, "timeframe": 60,
+        "kline_limit": 200, "z_score_window": 21,
+    }
+    for k, v in defaults.items():
+        if k not in data:
+            data[k] = v
+
+    # Convert bool-like strings to Python booleans
+    for bool_key in ["custom_thresholds", "limit_order_basis", "auto_trade"]:
+        val = data.get(bool_key)
+        if isinstance(val, str):
+            data[bool_key] = val.lower() in ("true", "1", "yes")
+        elif isinstance(val, bool):
+            pass
+        else:
+            data[bool_key] = bool(val)
+
+    lines = [
+        f'    PairConfig(',
+        f'        pair_id="{data["pair_id"]}",',
+        f'        ticker_1="{data["ticker_1"]}",',
+        f'        ticker_2="{data["ticker_2"]}",',
+        f'        signal_positive_ticker="{data["signal_positive_ticker"]}",',
+        f'        signal_negative_ticker="{data["signal_negative_ticker"]}",',
+        f'        allocated_capital={data["allocated_capital"]},',
+        f'        leverage={data["leverage"]},',
+        f'        signal_trigger_thresh={data["signal_trigger_thresh"]},',
+        f'        exit_threshold={data["exit_threshold"]},',
+        f'        custom_thresholds={data["custom_thresholds"]},',
+        f'        zscore_stop_loss={data["zscore_stop_loss"]},',
+        f'        stop_loss_fail_safe={data["stop_loss_fail_safe"]},',
+        f'        auto_trade={data["auto_trade"]},',
+        f'        time_stop_loss_hours={data["time_stop_loss_hours"]},',
+        f'        max_session_loss_pct={data["max_session_loss_pct"]},',
+        f'        limit_order_basis={data["limit_order_basis"]},',
+        f'        timeframe={data["timeframe"]},',
+        f'        kline_limit={data["kline_limit"]},',
+        f'        z_score_window={data["z_score_window"]},',
+        f'    ),',
+    ]
+    return '\n'.join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # ROUTES – Serve Frontend
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1296,14 +1948,70 @@ def serve_static(filename):
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# ── WebSocket: background push thread ────────────────────────────────────────
+_ws_push_active = False
+
+def _ws_background_push():
+    """Push execution status + portfolio status to WebSocket clients every 2s."""
+    global _ws_push_active
+    _ws_push_active = True
+    while _ws_push_active:
+        try:
+            # Execution status
+            running = execution_process is not None and execution_process.poll() is None
+            with execution_lock:
+                lines = list(execution_output[-100:])
+            socketio.emit("exec_status", {
+                "running": running,
+                "output": lines,
+            })
+
+            # Portfolio status (only if files exist)
+            pf_data = {"config_pairs": [], "live_pairs": [], "portfolio": {}}
+            try:
+                if PORTFOLIO_CONFIG.exists():
+                    content = PORTFOLIO_CONFIG.read_text(encoding="utf-8")
+                    pf_data["config_pairs"] = _parse_portfolio_config_pairs(content)
+            except Exception:
+                pass
+            try:
+                if PORTFOLIO_STATUS_JSON.exists():
+                    pf_data["portfolio"] = json.loads(PORTFOLIO_STATUS_JSON.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+            try:
+                for f in EXECUTION_DIR.glob("status_*.json"):
+                    if f.name in ("status_portfolio.json", "status.json"):
+                        continue
+                    try:
+                        pf_data["live_pairs"].append(json.loads(f.read_text(encoding="utf-8")))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            socketio.emit("portfolio_status", pf_data)
+        except Exception:
+            pass
+        socketio.sleep(2)
+
+
+@socketio.on("connect")
+def ws_connect():
+    """Client connected — start push thread if not already running."""
+    global _ws_push_active
+    if not _ws_push_active:
+        socketio.start_background_task(_ws_background_push)
+
+
 if __name__ == "__main__":
-    print(f"🚀 Dashboard server starting...")
+    print(f"Dashboard server starting (WebSocket enabled)...")
     print(f"   Project root: {BASE_DIR}")
     print(f"   Open http://localhost:5000 in your browser")
-    app.run(
+    socketio.run(
+        app,
         host="0.0.0.0",
         port=5000,
-        debug=True,
-        extra_files=[],
-        exclude_patterns=["*/site-packages/*", "*/Lib/*", "*/__pycache__/*"],
+        debug=False,
+        use_reloader=False,  # CRITICAL: reloader kills bot subprocesses when .py files change
+        allow_unsafe_werkzeug=True,
     )

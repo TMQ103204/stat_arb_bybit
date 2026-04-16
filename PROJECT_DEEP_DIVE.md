@@ -1,9 +1,5 @@
 # StatArb Bybit – Tài Liệu Kỹ Thuật Toàn Diện
 
-> **Mục tiêu của file này**: Thay thế việc phải đọc từng dòng code. Sau khi đọc xong tài liệu này,
-> bạn sẽ hiểu toàn bộ dự án: kiến trúc, luồng dữ liệu, từng hàm quan trọng, các quyết định thiết kế,
-> và những bug đã từng xảy ra cùng cách xử lý chúng.
-
 ---
 
 ## 1. TỔNG QUAN DỰ ÁN
@@ -50,8 +46,14 @@ stat-arb-bybit/
 │   └── 3_backtest_file.csv       # [OUTPUT] Dữ liệu backtest
 │
 ├── execution/                    # Module 2: Bot giao dịch thực tế
-│   ├── main_execution.py         # ★ Entry point bot - vòng lặp chính
-│   ├── config_execution_api.py   # Config + Bybit session + retry wrapper
+│   ├── main_execution.py         # Entry point bot single-pair
+│   ├── main_portfolio.py         # ★ Entry point bot multi-pair
+│   ├── portfolio_config.py       # ★ Config multi-pair: danh sách cặp + risk limits
+│   ├── portfolio_manager.py      # ★ Điều phối nhiều PairTrader + giám sát drawdown
+│   ├── pair_config.py            # ★ PairConfig (cấu hình) + PairState (runtime)
+│   ├── pair_trader.py            # ★ Lifecycle 1 cặp: SEEKING → HOLDING → CLOSING
+│   ├── pair_rotator.py           # ★ Auto rotation: thay cặp kém bằng cặp tốt hơn
+│   ├── config_execution_api.py   # Config + Bybit session + retry wrapper (single-pair)
 │   ├── func_trade_management.py  # ★ Logic tìm tín hiệu và đặt lệnh
 │   ├── func_stats.py             # Tính spread và z-score
 │   ├── func_get_zscore.py        # Lấy z-score live từ Bybit
@@ -65,15 +67,16 @@ stat-arb-bybit/
 │   ├── logger_setup.py           # Cấu hình logging
 │   ├── reset_bot.py              # Hủy lệnh + đóng vị thế (cleanup)
 │   ├── bot.log                   # [OUTPUT] Log file của bot
-│   └── status.json               # [OUTPUT] Trạng thái hiện tại của bot
+│   ├── status.json               # [OUTPUT] Trạng thái single-pair
+│   └── status_portfolio.json     # [OUTPUT] Trạng thái multi-pair
 │
 ├── dashboard/
-│   └── dashboard_server.py       # ★ Flask server (~1300 dòng, REST API)
+│   └── dashboard_server.py       # ★ Flask server (~1500 dòng, REST API)
 │
 ├── docs/                         # Frontend dashboard
-│   ├── index.html                # Giao diện chính
-│   ├── app.js                    # Logic frontend
-│   └── styles.css                # Styling
+│   ├── index.html                # Giao diện chính (mode-aware)
+│   ├── app.js                    # Logic frontend + multi-pair UI
+│   └── styles.css                # Styling + pair card grid
 │
 └── resources/
     ├── Kelly Criterion.xlsx       # Tài liệu tính toán sizing
@@ -87,16 +90,16 @@ stat-arb-bybit/
                               │
                ┌──────────────┴───────────────┐
                ▼                              ▼
-        [Strategy Pipeline]           [Execution Bot]
-        main_strategy.py              main_execution.py
-               │                              │
-               ▼                              ▼
-        1. Lấy symbols              1. Đọc config (ticker_1, ticker_2)
-        2. Tải giá lịch sử          2. Set leverage
-        3. Tính cointegration       3. Vòng lặp: check z-score mỗi 2s
-        4. Lọc và rank pairs        4. Vào lệnh khi |z| > threshold
-        5. Lưu CSV                  5. Giữ vị thế, monitor PnL + stop-loss
-                                   6. Đóng khi z về 0 (hoặc stop-loss)
+        [Strategy Pipeline]           [Execution Engine]
+        main_strategy.py              ┌─────────────────────┐
+               │                      │ Single-pair:        │
+               ▼                      │  main_execution.py  │
+        1. Lấy symbols               │ Multi-pair:         │
+        2. Tải giá lịch sử           │  main_portfolio.py  │
+        3. Tính cointegration        │  → PortfolioManager │
+        4. Lọc và rank pairs         │    → PairTrader ×N  │
+        5. Lưu CSV                   │    → PairRotator    │
+                                     └─────────────────────┘
 ```
 
 ---
@@ -832,7 +835,154 @@ Kiểm tra positions/orders (4 API calls)
 
 ---
 
-## 10. DEPENDENCIES
+## 10. MULTI-PAIR PORTFOLIO SYSTEM
+
+### 10.1. Kiến trúc tổng quan
+
+Khi chạy ở **Demo mode**, hệ thống sử dụng multi-pair engine thay vì single-pair. Kiến trúc:
+
+```
+main_portfolio.py
+    └── PortfolioManager
+            ├── PairTrader (AXS_IP)     ← Thread 1
+            ├── PairTrader (KAS_POPCAT) ← Thread 2
+            ├── PairTrader (...)        ← Thread N
+            ├── MonitorThread           ← Giám sát drawdown
+            └── PairRotator             ← Tự động xoay cặp (optional)
+```
+
+Mỗi `PairTrader` chạy trong thread riêng, có lifecycle độc lập: SEEKING → HOLDING → CLOSING.
+
+### 10.2. Cấu hình: `portfolio_config.py`
+
+```python
+ACTIVE_PAIRS = [
+    PairConfig(
+        pair_id="AXS_IP",
+        ticker_1="AXSUSDT",
+        ticker_2="IPUSDT",
+        signal_positive_ticker="IPUSDT",
+        signal_negative_ticker="AXSUSDT",
+        allocated_capital=50,
+        leverage=2,
+        signal_trigger_thresh=1.1,
+        # ... các tham số khác
+    ),
+    # Thêm cặp khác...
+]
+```
+
+Các tham số portfolio-level:
+
+| Tham số | Mặc định | Ý nghĩa |
+|---------|----------|---------|
+| `MAX_TOTAL_EXPOSURE_USDT` | 500 | Notional tối đa toàn portfolio |
+| `MAX_PAIRS_SIMULTANEOUS` | 5 | Số cặp tối đa cùng lúc |
+| `MAX_PORTFOLIO_DRAWDOWN_PCT` | 15.0 | Halt tất cả nếu drawdown > 15% |
+| `POST_CLOSE_COOLDOWN_SEC` | 300 | Cooldown giữa các trade/cặp |
+
+### 10.3. PairConfig & PairState (`pair_config.py`)
+
+- **PairConfig**: Cấu hình bất biến cho mỗi cặp (ticker, capital, threshold)
+- **PairState**: Trạng thái runtime có thể thay đổi (kill_switch, zscore, PnL)
+
+Mỗi cặp có `PairState.reset_for_new_trade()` để reset state sạch khi bắt đầu trade mới.
+
+### 10.4. PairTrader (`pair_trader.py`)
+
+Thread lifecycle cho mỗi cặp:
+
+```
+_tick() mỗi 2 giây:
+    │
+    ├── Kiểm tra positions (orphan detection)
+    ├── SEEKING (kill_switch=0): gọi manage_new_trades()
+    ├── RE-ATTACH: phát hiện vị thế sẵn, tự đồng bộ
+    ├── HOLDING (kill_switch=1): _tick_holding()
+    │       ├── Z-score monitoring (frozen params)
+    │       ├── PnL tracking
+    │       └── Exit conditions (z-stop, time-stop, TP)
+    └── CLOSING (kill_switch=2): close_all_positions()
+```
+### 10.6. Auto Pair Rotation (`pair_rotator.py`)
+
+Engine tự động thay cặp kém bằng cặp tốt hơn:
+
+```
+Cứ 6 giờ:
+  1. Chạy strategy scan → cập nhật 2_cointegrated_pairs.csv
+  2. Normalize composite_score → [0, 1]
+  3. So sánh cặp đang SEEKING (worst) vs cặp mới (best)
+  4. Nếu cặp mới tốt hơn ≥ 20% (buffer) → thay thế
+```
+
+Quy tắc an toàn:
+- **KHÔNG BAO GIỜ** thay cặp đang HOLDING (có vị thế mở)
+- Chỉ thay cặp đang SEEKING
+- Cooldown 30 phút giữa các lần xoay
+- Tối đa 1 cặp/lần quét
+
+Cấu hình:
+```python
+AUTO_ROTATION_ENABLED = True
+SCAN_INTERVAL_HOURS = 6
+ROTATION_BUFFER = 0.2          # Cải thiện tối thiểu 20%
+MAX_ROTATIONS_PER_CYCLE = 1
+ROTATION_COOLDOWN_MIN = 30
+```
+
+### 10.7. Portfolio Manager (`portfolio_manager.py`)
+
+Điều phối tất cả PairTrader + giám sát rủi ro portfolio:
+
+- `traders: dict[str, PairTrader]` — O(1) lookup theo pair_id
+- `add_pair(config)` — Tạo + start PairTrader thread mới
+- `stop_pair(pair_id)` — Dừng + xóa PairTrader
+- Background monitor: check wallet equity mỗi 10s → tính drawdown
+- Nếu drawdown ≥ 15% → **HALT TẤT CẢ**
+- Ghi `status_portfolio.json` với trạng thái từng cặp
+
+### 10.8. Dashboard Multi-Pair UI
+
+**Mode toggle**: Chuyển đổi giữa 🎯 Single và 📦 Multi bằng toggle trên header (độc lập với environment Test/Demo/Live).
+
+| Tính năng | Mô tả |
+|-----------|--------|
+| Pair Cards Grid | Card cho mỗi cặp: z-score, PnL, hold time |
+| Status Colors | Amber (SEEKING), Green (HOLDING), Red (CLOSING), Gray (HALTED) |
+| Add Pair | Click Select trên bảng Pairs → dialog tự fill → tùy chỉnh → Add |
+| Remove Pair | Click Remove trên card → xóa khỏi config |
+| Close Pair | ⏹ Close: đóng vị thế trực tiếp trên Bybit + dừng trader |
+| Pause Pair | ⏸ Pause: dừng tìm trade mới (không đóng vị thế) |
+| Ticker Overlap Protection | Backend chặn thêm cặp chung token (HTTP 409) |
+| Config + Status Merge | Luôn hiện cặp từ config, overlay live status khi bot chạy |
+
+**API endpoints mới:**
+
+| Endpoint | Method | Mô tả |
+|----------|--------|--------|
+| `/api/portfolio/status` | GET | Trạng thái portfolio + per-pair status |
+| `/api/portfolio/pairs` | GET | Danh sách cặp từ portfolio_config.py |
+| `/api/portfolio/add-pair` | POST | Thêm cặp (có check overlap + duplicate) |
+| `/api/portfolio/remove-pair` | POST | Xóa cặp (bracket-matching, xử lý \r\n) |
+
+### 10.9. Ticker Overlap Protection
+
+Khi 2 cặp chung 1 token (VD: AXS/IP + AXS/SNX → chung AXSUSDT):
+
+**Vấn đề:**
+- Position check nhầm: `open_position_confirmation("AXSUSDT")` trả về chung cho cả 2 cặp
+- RE-ATTACH nhầm hoặc orphan detection sai
+- Vị thế tự triệt tiêu (cặp 1 Long + cặp 2 Short cùng token)
+
+**Giải pháp (3 lớp):**
+1. Backend `/api/portfolio/add-pair` kiểm tra và reject (HTTP 409)
+2. `main_portfolio.py` log WARNING khi startup
+3. Frontend hiển thị thông báo lỗi khi bị reject
+
+---
+
+## 11. DEPENDENCIES
 
 ```
 pybit >= 5.8.0       # Bybit Python SDK (V5 API)
@@ -849,24 +999,34 @@ flask-cors >= 4.0.0   # CORS headers
 
 ---
 
-## 11. LÀM THẾ NÀO ĐỂ THÊM CẶP COIN MỚI
+## 12. LÀM THẾ NÀO ĐỂ SỬ DỤNG
 
-1. (Tùy chọn) Chạy Strategy pipeline từ dashboard để tìm cặp mới
-2. Mở `execution/config_execution_api.py` (hoặc qua Dashboard UI)
-3. Đổi `ticker_1` và `ticker_2`
-4. Đổi `signal_positive_ticker` và `signal_negative_ticker` (cần hiểu hedge direction)
-5. Chạy `reset_bot.py` để đảm bảo không còn vị thế cũ
-6. Start execution bot
+### Single-Pair (Test/Live mode)
 
-**`signal_positive_ticker`** là ticker "long khi z-score âm":
+1. Chạy Strategy pipeline từ dashboard để tìm cặp
+2. Chọn cặp → Click Select → tự fill vào Execution Config
+3. Start Bot → chạy `main_execution.py`
+
+### Multi-Pair (Demo mode)
+
+1. Chạy Strategy pipeline (Run Strategy)
+2. Chuyển mode sang **DEMO**
+3. Click **Select** trên bảng Cointegrated Pairs → Dialog tự fill
+4. Tùy chỉnh Capital, Leverage, Entry Z → **Add to Portfolio**
+5. Lặp lại cho các cặp khác (tránh chung token!)
+6. Click **▶ Start** → chạy `main_portfolio.py`
+7. Theo dõi pair cards cập nhật real-time
+
+**Lưu ý:**
+- `signal_positive_ticker` là ticker "long khi z-score âm"
 - Khi z-score dương: short `signal_positive_ticker`, long `signal_negative_ticker`
 - Khi z-score âm: long `signal_positive_ticker`, short `signal_negative_ticker`
 
 ---
 
-## 12. GIỚI HẠN VÀ CẢI THIỆN CÓ THỂ
+## 13. GIỚI HẠN VÀ CẢI THIỆN CÓ THỂ
 
-1. **Chỉ 1 cặp/thời điểm**: Bot hiện tại chỉ quản lý 1 cặp. Để multi-pair cần spawn nhiều process riêng biệt (mỗi process = 1 cặp riêng).
+1. ~~**Chỉ 1 cặp/thời điểm**~~: ✅ Đã giải quyết với Multi-Pair Portfolio System.
 
 2. **OLS không có intercept**: `sm.OLS(series_1, series_2)` không có hằng số. Kết quả là hedge_ratio không có bias correction.
 
@@ -876,8 +1036,10 @@ flask-cors >= 4.0.0   # CORS headers
 
 5. **Không có WebSocket**: Bot dùng REST API polling. Latency ~1-2s/tick.
 
-6. **Rate limit**: Bot dùng `time.sleep(0.5)` giữa các orderbook calls, `time.sleep(2)` mỗi vòng lặp chính.
+6. **Rate limit**: Bot dùng `time.sleep(0.5)` giữa các orderbook calls, `time.sleep(2)` mỗi vòng lặp chính. Multi-pair cần delay stagger giữa các thread để tránh rate limit.
+
+7. **Ticker overlap**: Multi-pair không hỗ trợ 2 cặp chung token. Backend chặn khi Add Pair nhưng không chặn nếu edit trực tiếp file config.
 
 ---
 
-*Tài liệu này phản ánh trạng thái code tính đến ngày 04/04/2026.*
+*Tài liệu này phản ánh trạng thái code tính đến ngày 14/04/2026.*

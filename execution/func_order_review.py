@@ -2,19 +2,28 @@ from func_position_calls import query_existing_order
 from func_position_calls import get_open_positions
 from func_position_calls import get_active_positions
 from func_calcultions import get_trade_details
-from config_execution_api import session_public
 from logger_setup import get_logger
 from bybit_response import get_result_dict, get_ret_code
 
 logger = get_logger("order_review")
 
 
+def _resolve_session_public(session_pub=None):
+    if session_pub is not None:
+        return session_pub
+    from config_execution_api import session_public
+    return session_public
+
+
 # Check order items (updated for Bybit V5 API)
-def check_order(ticker, order_id, remaining_capital, direction="Long"):
+def check_order(ticker, order_id, remaining_capital, direction="Long",
+                session_pub=None, session_priv=None, retry_fn=None):
+
+    sess = _resolve_session_public(session_pub)
 
     # Get current orderbook
     try:
-        orderbook = session_public.get_orderbook(category="linear", symbol=ticker)
+        orderbook = sess.get_orderbook(category="linear", symbol=ticker)
     except Exception as e:
         logger.error("Failed to get orderbook for %s: %s", ticker, e)
         return None
@@ -29,13 +38,16 @@ def check_order(ticker, order_id, remaining_capital, direction="Long"):
     logger.debug("mid_price for %s: %.6f", ticker, mid_price)
 
     # Get trade details
-    order_price, order_quantity, order_status = query_existing_order(ticker, order_id, direction)
+    order_price, order_quantity, order_status = query_existing_order(
+        ticker, order_id, direction,
+        session_priv=session_priv, retry_fn=retry_fn
+    )
 
     # Get open positions
-    position_price, position_quantity = get_open_positions(ticker, direction)
-
-    # Get active positions
-    # active_order_price, active_order_quantity = get_active_positions(ticker)
+    position_price, position_quantity = get_open_positions(
+        ticker, direction,
+        session_priv=session_priv, retry_fn=retry_fn
+    )
 
     # Calculate position value in USDT
     position_value_usdt = position_quantity * position_price if position_price > 0 else position_quantity * mid_price

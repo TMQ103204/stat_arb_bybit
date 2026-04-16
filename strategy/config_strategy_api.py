@@ -13,7 +13,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 # CONFIG
 # mode options: "test" (testnet), "demo" (mainnet demo - real prices, virtual money), "live" (real money)
-mode = "live"
+mode = "demo"
 timeframe = 60
 kline_limit = 200
 z_score_window = 21

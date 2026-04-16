@@ -138,13 +138,18 @@
         <span class="tag">Bybit</span>
       </div>
 
-      <!-- ── Global Mode (new) ── -->
+      <!-- ── Global Mode (environment) ── -->
       <div class="header-mode">
         <input type="hidden" id="global-mode" value="demo" />
         <div class="mode-switcher" id="global-mode-switcher">
           <button class="mode-btn mode-test" data-mode="test" onclick="setGlobalModeUI('test')">TEST</button>
           <button class="mode-btn mode-demo" data-mode="demo" onclick="setGlobalModeUI('demo')">DEMO</button>
           <button class="mode-btn mode-live" data-mode="live" onclick="setGlobalModeUI('live')">LIVE</button>
+        </div>
+        <!-- ── Trade Mode (single / multi) ── -->
+        <div class="trade-mode-switcher" id="trade-mode-switcher">
+          <button class="trade-mode-btn" data-tmode="single" onclick="setTradeMode('single')">🎯 Single</button>
+          <button class="trade-mode-btn" data-tmode="multi" onclick="setTradeMode('multi')">📦 Multi</button>
         </div>
       </div>
 
@@ -647,6 +652,196 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
         </div>
       </div>
 
+      <!-- ────── Multi-Pair Portfolio Panel (Multi trade mode) ────── -->
+      <div class="card full-width" id="portfolio-panel" style="display:none">
+        <div class="card-header">
+          <span class="card-title"
+            ><span class="icon">📦</span> Multi-Pair Portfolio
+            <span style="font-size:12px;color:var(--cyan);font-weight:400"
+              >(<span id="portfolio-pair-count">0</span> pairs)</span
+            ></span
+          >
+          <div class="card-actions">
+            <button class="btn btn-accent btn-sm" onclick="openAddPairDialog()">
+              + Add Pair
+            </button>
+            <button class="btn btn-outline btn-sm" onclick="loadPortfolioStatus()">
+              ↻ Refresh
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <!-- Portfolio Overview -->
+          <div class="metrics-row" id="portfolio-overview">
+            <div class="metric-chip">
+              <span class="metric-label">Equity</span>
+              <span class="metric-value" id="pf-equity">—</span>
+            </div>
+            <div class="metric-chip">
+              <span class="metric-label">Drawdown</span>
+              <span class="metric-value" id="pf-drawdown">—</span>
+            </div>
+            <div class="metric-chip">
+              <span class="metric-label">Total PnL</span>
+              <span class="metric-value" id="pf-total-pnl">—</span>
+            </div>
+            <div class="metric-chip">
+              <span class="metric-label">Active</span>
+              <span class="metric-value" id="pf-active-count">0</span>
+            </div>
+            <div class="metric-chip">
+              <span class="metric-label">Seeking</span>
+              <span class="metric-value" id="pf-seeking-count">0</span>
+            </div>
+          </div>
+
+          <!-- Pair Cards Grid -->
+          <div class="pair-cards-grid" id="pair-cards-grid">
+            <div class="pair-card pair-card-empty" id="pair-card-placeholder">
+              <div style="text-align:center;padding:30px 20px;color:var(--text-muted)">
+                <div style="font-size:28px;margin-bottom:8px">📦</div>
+                <div style="font-size:13px">No pairs configured</div>
+                <div style="font-size:11px;margin-top:4px">Click <strong>+ Add Pair</strong> to get started</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ────── Pair Log Modal (hidden) ────── -->
+      <div id="pair-log-modal" style="display:none;position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.65);backdrop-filter:blur(4px);align-items:center;justify-content:center">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;width:min(700px,96vw);max-height:85vh;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.6);display:flex;flex-direction:column">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">
+            <span id="pair-log-title" style="font-size:15px;font-weight:700;color:var(--text-primary)">Pair Log</span>
+            <button onclick="closePairLogModal()" style="background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;padding:4px 8px">✕</button>
+          </div>
+          <pre id="pair-log-content" style="flex:1;overflow-y:auto;padding:14px 18px;margin:0;font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.6;color:var(--text-secondary);max-height:65vh;white-space:pre-wrap;word-break:break-all">Loading...</pre>
+        </div>
+      </div>
+
+      <!-- ────── Add Pair Dialog (hidden) ────── -->
+      <div id="add-pair-dialog" style="display:none;position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.65);backdrop-filter:blur(4px);align-items:center;justify-content:center">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;width:min(1000px,98vw);max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.6);padding:28px 32px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+            <span style="font-size:16px;font-weight:700;color:var(--text-primary)">🎯 Execution Config</span>
+            <button onclick="closeAddPairDialog()" style="background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;padding:4px 8px;border-radius:6px">✕</button>
+          </div>
+          <div class="form-grid" style="grid-template-columns:repeat(4,1fr)">
+            <div class="form-group">
+              <label>Ticker 1</label>
+              <input type="text" id="ap-ticker1" placeholder="e.g. IPUSDT" />
+            </div>
+            <div class="form-group">
+              <label>Ticker 2</label>
+              <input type="text" id="ap-ticker2" placeholder="e.g. SNXUSDT" />
+            </div>
+            <div class="form-group">
+              <label>Capital (USDT)</label>
+              <input type="number" id="ap-capital" value="10" step="1" />
+            </div>
+            <div class="form-group">
+              <label>Entry Threshold</label>
+              <input type="number" id="ap-trigger" value="1.1" step="0.1" />
+            </div>
+            <div class="form-group">
+              <label>Stop Loss Fail Safe</label>
+              <input type="number" id="ap-stoploss" value="0" step="0.01" />
+            </div>
+            <div class="form-group">
+              <label>Z-Score Stop Loss</label>
+              <input type="number" id="ap-zstop" value="10" step="0.1" />
+            </div>
+            <div class="form-group">
+              <label>Limit Order Basis</label>
+              <div class="toggle-wrap" style="margin-top:6px">
+                <input type="checkbox" id="ap-limit" checked style="display:none" />
+                <div class="toggle active" onclick="
+                  let isActive = this.classList.toggle('active');
+                  document.getElementById('ap-limit').checked = isActive;
+                  document.getElementById('ap-limit-label').innerText = isActive ? 'Enabled' : 'Disabled';
+                "></div>
+                <span style="font-size:12px;color:var(--text-secondary)" id="ap-limit-label">Enabled</span>
+              </div>
+            </div>
+            <div class="form-group" title="If OFF, bot will stop after closing the current trade">
+              <label>Auto-Trade Loop</label>
+              <div class="toggle-wrap" style="margin-top:6px">
+                <input type="checkbox" id="ap-autotrade" checked style="display:none" />
+                <div class="toggle active" onclick="
+                  let isActive = this.classList.toggle('active');
+                  document.getElementById('ap-autotrade').checked = isActive;
+                  document.getElementById('ap-autotrade-label').innerText = isActive ? 'Enabled' : 'Disabled';
+                "></div>
+                <span id="ap-autotrade-label" style="font-size:12px;color:var(--text-secondary)">Enabled</span>
+              </div>
+            </div>
+            <div class="form-group" title="Enable to customize Leverage and Exit Threshold">
+              <label>User Custom</label>
+              <div class="toggle-wrap" style="margin-top:6px">
+                <input type="checkbox" id="ap-custom" checked style="display:none" />
+                <div class="toggle active" onclick="
+                  let isActive = this.classList.toggle('active');
+                  document.getElementById('ap-custom').checked = isActive;
+                  document.getElementById('ap-custom-label').innerText = isActive ? 'Enabled' : 'Disabled';
+                  document.getElementById('ap-custom-panel').style.display = isActive ? 'block' : 'none';
+                "></div>
+                <span id="ap-custom-label" style="font-size:12px;color:var(--text-secondary)">Enabled</span>
+              </div>
+            </div>
+            <div id="ap-custom-panel" style="display:block;grid-column:1/-1">
+              <div class="form-grid" style="grid-template-columns:repeat(2,1fr);margin-top:4px">
+                <div class="form-group">
+                  <label>Leverage (x)</label>
+                  <input type="number" id="ap-leverage" min="1" max="50" step="1" value="2" />
+                </div>
+                <div class="form-group">
+                  <label>Exit Threshold</label>
+                  <input type="number" id="ap-exit-threshold" step="0.1" value="0" />
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Hidden auto-generated fields -->
+          <input type="hidden" id="ap-pair-id" />
+          <input type="hidden" id="ap-sig-pos" />
+          <input type="hidden" id="ap-sig-neg" />
+          <!-- P&L Estimate Panel -->
+          <div id="ap-pnl-estimate-panel" style="
+            margin-top:16px;padding:14px 18px;
+            background:linear-gradient(135deg,rgba(34,211,238,.06) 0%,rgba(16,185,129,.04) 100%);
+            border:1px solid rgba(34,211,238,.15);border-radius:12px;
+            display:none;
+          ">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+              <span style="font-size:13px;font-weight:600;color:var(--text-primary)">📊 P&L Estimate</span>
+              <span id="ap-pnl-est-pair" style="font-size:11px;color:var(--cyan);font-family:'JetBrains Mono',monospace"></span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+              <div>
+                <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">Gross P&L</div>
+                <div id="ap-pnl-est-gross" style="font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--text-primary)">—</div>
+              </div>
+              <div>
+                <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">Total Fees</div>
+                <div id="ap-pnl-est-fees" style="font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f59e0b">—</div>
+              </div>
+              <div>
+                <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">Net P&L</div>
+                <div id="ap-pnl-est-net" style="font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace">—</div>
+              </div>
+              <div>
+                <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">% Return</div>
+                <div id="ap-pnl-est-pct" style="font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace">—</div>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:18px;justify-content:flex-end">
+            <button class="btn btn-outline btn-sm" onclick="closeAddPairDialog()">Cancel</button>
+            <button class="btn btn-green btn-sm" onclick="submitAddPair()">Add to Portfolio</button>
+          </div>
+        </div>
+      </div>
+
       <!-- ────── Execution Bot Control ────── -->
       <div class="card full-width">
         <div class="card-header">
@@ -694,6 +889,7 @@ Bot is idle. Configure your pair and click Start.</pre
     </main>
 
 
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="app.js"></script>
 
     <!-- ═══ Z-Score History Modal ═══════════════════════════════════════════ -->

@@ -1,8 +1,3 @@
-from config_execution_api import ticker_1
-from config_execution_api import ticker_2
-from config_execution_api import session_public, retry_api_call
-from config_execution_api import timeframe
-from config_execution_api import kline_limit
 from func_calcultions import extract_close_prices
 from logger_setup import get_logger
 from bybit_response import get_result_list, get_ret_code
@@ -12,13 +7,30 @@ import time
 logger = get_logger("price_calls")
 
 
+def _resolve_session_public(session_pub=None):
+    if session_pub is not None:
+        return session_pub
+    from config_execution_api import session_public
+    return session_public
+
+
+def _resolve_retry(retry_fn=None):
+    if retry_fn is not None:
+        return retry_fn
+    from config_execution_api import retry_api_call
+    return retry_api_call
+
+
 # Get trade liquidity for ticker (updated for Bybit V5 API)
-def get_ticker_trade_liquidity(ticker):
+def get_ticker_trade_liquidity(ticker, session_pub=None, retry_fn=None):
+
+    sess = _resolve_session_public(session_pub)
+    retry = _resolve_retry(retry_fn)
 
     # Get trades history
     try:
-        trades = retry_api_call(
-            session_public.get_public_trade_history,
+        trades = retry(
+            sess.get_public_trade_history,
             category="linear",
             symbol=ticker,
             limit=50
@@ -43,18 +55,25 @@ def get_ticker_trade_liquidity(ticker):
 
 
 # Get start times
-def get_timestamps():
+def get_timestamps(tf=None, kl=None):
+    if tf is None:
+        from config_execution_api import timeframe
+        tf = timeframe
+    if kl is None:
+        from config_execution_api import kline_limit
+        kl = kline_limit
+
     now = datetime.datetime.now()
     time_start_date = now
     time_next_date = now
-    if timeframe == 60:
-        time_start_date = now - datetime.timedelta(hours=kline_limit)
+    if tf == 60:
+        time_start_date = now - datetime.timedelta(hours=kl)
         time_next_date = now + datetime.timedelta(seconds=30)
-    elif timeframe == "D":
-        time_start_date = now - datetime.timedelta(days=kline_limit)
+    elif tf == "D":
+        time_start_date = now - datetime.timedelta(days=kl)
         time_next_date = now + datetime.timedelta(minutes=1)
     else:
-        time_start_date = now - datetime.timedelta(hours=kline_limit)
+        time_start_date = now - datetime.timedelta(hours=kl)
         time_next_date = now + datetime.timedelta(seconds=30)
     time_start_seconds = int(time_start_date.timestamp())
     time_now_seconds = int(now.timestamp())
@@ -63,17 +82,26 @@ def get_timestamps():
 
 
 # Get historical prices (klines) - updated for Bybit V5 API
-def get_price_klines(ticker):
+def get_price_klines(ticker, session_pub=None, retry_fn=None, tf=None, kl=None):
+
+    sess = _resolve_session_public(session_pub)
+    retry = _resolve_retry(retry_fn)
+    if tf is None:
+        from config_execution_api import timeframe
+        tf = timeframe
+    if kl is None:
+        from config_execution_api import kline_limit
+        kl = kline_limit
 
     # Get prices (V5 uses start in milliseconds)
-    time_start_seconds, _, _ = get_timestamps()
+    time_start_seconds, _, _ = get_timestamps(tf=tf, kl=kl)
     try:
-        prices = retry_api_call(
-            session_public.get_mark_price_kline,
+        prices = retry(
+            sess.get_mark_price_kline,
             category="linear",
             symbol=ticker,
-            interval=str(timeframe),
-            limit=kline_limit,
+            interval=str(tf),
+            limit=kl,
             start=time_start_seconds * 1000
         )
     except Exception as e:
@@ -88,7 +116,7 @@ def get_price_klines(ticker):
         return []
 
     result_list = get_result_list(prices)
-    if len(result_list) != kline_limit:
+    if len(result_list) != kl:
         return []
 
     # Convert V5 array format to dict format and reverse to oldest first
@@ -105,13 +133,21 @@ def get_price_klines(ticker):
 
 
 # Get latest klines
-def get_latest_klines():
+def get_latest_klines(t1=None, t2=None, session_pub=None, retry_fn=None, tf=None, kl=None):
+    if t1 is None:
+        from config_execution_api import ticker_1
+        t1 = ticker_1
+    if t2 is None:
+        from config_execution_api import ticker_2
+        t2 = ticker_2
+
     series_1 = []
     series_2 = []
-    prices_1 = get_price_klines(ticker_1)
-    prices_2 = get_price_klines(ticker_2)
+    prices_1 = get_price_klines(t1, session_pub=session_pub, retry_fn=retry_fn, tf=tf, kl=kl)
+    prices_2 = get_price_klines(t2, session_pub=session_pub, retry_fn=retry_fn, tf=tf, kl=kl)
     if len(prices_1) > 0:
         series_1 = extract_close_prices(prices_1)
     if len(prices_2) > 0:
         series_2 = extract_close_prices(prices_2)
     return (series_1, series_2)
+

@@ -1,5 +1,3 @@
-from config_execution_api import stop_loss_fail_safe
-from config_execution_api import session_public
 from logger_setup import get_logger
 from bybit_response import get_result_list
 import math
@@ -9,6 +7,21 @@ logger = get_logger("calculations")
 
 # Cache for instrument info to avoid repeated API calls
 _instrument_cache = {}
+
+
+def _resolve_session_public(session_pub=None):
+    if session_pub is not None:
+        return session_pub
+    from config_execution_api import session_public
+    return session_public
+
+
+def _resolve_session_private(session_priv=None):
+    if session_priv is not None:
+        return session_priv
+    from config_execution_api import session_private
+    return session_private
+
 
 # ── Fee rate cache ────────────────────────────────────────────────────────────
 # get_fee_rates requires a real (mainnet) authenticated session.
@@ -48,12 +61,13 @@ def _get_taker_fee_rate(symbol: str, fallback_rate: float) -> float:
         return fallback_rate
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_instrument_info(symbol):
+def _get_instrument_info(symbol, session_pub=None):
     """Fetch and cache instrument info (tick size + qty step) from API."""
     if symbol in _instrument_cache:
         return _instrument_cache[symbol]
+    sess = _resolve_session_public(session_pub)
     try:
-        info = session_public.get_instruments_info(category="linear", symbol=symbol)
+        info = sess.get_instruments_info(category="linear", symbol=symbol)
         info_list = get_result_list(info)
         if len(info_list) == 0:
             return (None, None)
@@ -78,8 +92,8 @@ def _decimals_from_step(step):
 
 
 # Get qty step size from exchange instrument info
-def get_qty_step(symbol):
-    _, qty_step = _get_instrument_info(symbol)
+def get_qty_step(symbol, session_pub=None):
+    _, qty_step = _get_instrument_info(symbol, session_pub=session_pub)
     return qty_step
 
 
@@ -106,7 +120,11 @@ def extract_close_prices(prices):
 
 
 # Get trade details and latest prices (updated for Bybit V5 orderbook format)
-def get_trade_details(orderbook, direction="Long", capital=0):
+def get_trade_details(orderbook, direction="Long", capital=0, sl_failsafe=None, session_pub=None):
+
+    if sl_failsafe is None:
+        from config_execution_api import stop_loss_fail_safe
+        sl_failsafe = stop_loss_fail_safe
 
     # Set calculation and output variables
     mid_price = 0
@@ -118,7 +136,7 @@ def get_trade_details(orderbook, direction="Long", capital=0):
 
         # V5 orderbook uses "s" for symbol, "b" for bids, "a" for asks
         symbol = orderbook.get("s", "")
-        tick_size, qty_step = _get_instrument_info(symbol)
+        tick_size, qty_step = _get_instrument_info(symbol, session_pub=session_pub)
         price_rounding = _decimals_from_step(tick_size)
 
         # V5 format: bids = [[price, size], ...] (sorted desc), asks = [[price, size], ...] (sorted asc)
@@ -131,15 +149,13 @@ def get_trade_details(orderbook, direction="Long", capital=0):
 
         # Calculate hard stop loss
         if direction == "Long" and nearest_ask > 0:
-            # Aggressive limit: use best ask so the order crosses the spread and fills immediately
             mid_price = nearest_ask
-            if stop_loss_fail_safe > 0:
-                stop_loss = round(mid_price * (1 - stop_loss_fail_safe), price_rounding)
+            if sl_failsafe > 0:
+                stop_loss = round(mid_price * (1 - sl_failsafe), price_rounding)
         elif direction != "Long" and nearest_bid > 0:
-            # Aggressive limit: use best bid so the order crosses the spread and fills immediately
             mid_price = nearest_bid
-            if stop_loss_fail_safe > 0:
-                stop_loss = round(mid_price * (1 + stop_loss_fail_safe), price_rounding)
+            if sl_failsafe > 0:
+                stop_loss = round(mid_price * (1 + sl_failsafe), price_rounding)
 
         # Calculate quantity
         if mid_price > 0:
@@ -153,16 +169,12 @@ def get_trade_details(orderbook, direction="Long", capital=0):
     return (mid_price, stop_loss, quantity)
 
 
-def snapshot_cumrealised_pnl(long_ticker, short_ticker):
+def snapshot_cumrealised_pnl(long_ticker, short_ticker, session_priv=None):
     """
     Snapshot the current cumRealisedPnl for both legs at trade entry time.
-    This baseline is subtracted during PnL calculation so only THIS trade's
-    realised PnL (fees, funding since entry) is counted.
-
-    Returns:
-        (baseline_long, baseline_short) — floats, or (0.0, 0.0) on error.
+    Returns: (baseline_long, baseline_short) — floats, or (0.0, 0.0) on error.
     """
-    from config_execution_api import session_private as _priv
+    _priv = _resolve_session_private(session_priv)
     try:
         pos_long_res  = _priv.get_positions(category="linear", symbol=long_ticker)
         pos_short_res = _priv.get_positions(category="linear", symbol=short_ticker)
@@ -180,24 +192,14 @@ def snapshot_cumrealised_pnl(long_ticker, short_ticker):
 
 def calculate_exact_live_profit(long_ticker, short_ticker,
                                 baseline_realised_long=0.0,
-                                baseline_realised_short=0.0):
+                                baseline_realised_short=0.0,
+                                session_priv=None):
     """
     Calculate the current net PnL of an open pair trade using live Bybit data.
-
-    Uses Bybit's own `unrealisedPnl` and `cumRealisedPnl` fields directly
-    from the positions API.
-
-    The baseline_realised_* params are subtracted from cumRealisedPnl so that
-    only THIS trade's realised costs (entry fees, funding since entry) are
-    counted — not carry-over PnL from previous trades on the same symbol.
-
-    Returns:
-        (total_net_pnl_usdt, net_profit_pct) — both 0.0 on any error.
-        Returns (None, None) on API failure.
+    Returns: (total_net_pnl_usdt, net_profit_pct) or (None, None) on failure.
     """
-    from config_execution_api import session_private as _priv
+    _priv = _resolve_session_private(session_priv)
     try:
-        # -- 1. Current position data from Bybit ──────────────────────────
         pos_long_res  = _priv.get_positions(category="linear", symbol=long_ticker)
         pos_short_res = _priv.get_positions(category="linear", symbol=short_ticker)
 
@@ -212,19 +214,15 @@ def calculate_exact_live_profit(long_ticker, short_ticker,
         if size_long == 0 or size_short == 0:
             return 0.0, 0.0
 
-        # -- 2. Use Bybit's own PnL fields ────────────────────────────────
         unrealised_long  = float(pos_long.get("unrealisedPnl", 0))
         realised_long    = float(pos_long.get("cumRealisedPnl", 0)) - baseline_realised_long
         unrealised_short = float(pos_short.get("unrealisedPnl", 0))
         realised_short   = float(pos_short.get("cumRealisedPnl", 0)) - baseline_realised_short
 
-        # Total PnL per leg = unrealised + realised delta (only this trade)
         pnl_long  = unrealised_long + realised_long
         pnl_short = unrealised_short + realised_short
-
         total_net_pnl_usdt = pnl_long + pnl_short
 
-        # -- 3. Profit percentage relative to total entry capital ─────────
         total_capital = (avg_price_long * size_long) + (avg_price_short * size_short)
         net_profit_pct = (total_net_pnl_usdt / total_capital) * 100 if total_capital > 0 else 0.0
 
@@ -235,20 +233,12 @@ def calculate_exact_live_profit(long_ticker, short_ticker,
         return None, None
 
 
-def get_wallet_equity():
+def get_wallet_equity(session_priv=None):
     """
     Get live account equity and capital from Bybit Wallet Balance API.
-
-    Returns:
-        dict with keys:
-            - equity:           total account equity (wallet + unrealised)
-            - wallet_balance:   current USDT wallet balance (realized only)
-            - starting_capital: initial deposit = wallet_balance - cumRealisedPnl
-            - cum_realised_pnl: cumulative realized P&L since account creation
-            - unrealised_pnl:   P&L of currently open positions
-        Returns None on API failure.
+    Returns dict or None on failure.
     """
-    from config_execution_api import session_private as _priv
+    _priv = _resolve_session_private(session_priv)
     try:
         resp = _priv.get_wallet_balance(accountType="UNIFIED")
         accounts = resp.get("result", {}).get("list", [])
@@ -281,4 +271,3 @@ def get_wallet_equity():
     except Exception as e:
         logger.warning("get_wallet_equity failed: %s", e)
         return None
-

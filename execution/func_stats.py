@@ -1,14 +1,22 @@
-from config_execution_api import z_score_window
 from statsmodels.tsa.stattools import coint
 import statsmodels.api as sm
 import pandas as pd
 
 
+def _get_window(window=None):
+    """Resolve z_score_window: use param if given, else fall back to config."""
+    if window is not None:
+        return int(window)
+    from config_execution_api import z_score_window
+    return int(z_score_window)
+
+
 # Calculate Z-Score
-def calculate_zscore(spread):
+def calculate_zscore(spread, window=None):
+    w = _get_window(window)
     df = pd.DataFrame(spread)
-    mean = df.rolling(center=False, window=z_score_window).mean()
-    std = df.rolling(center=False, window=z_score_window).std()
+    mean = df.rolling(center=False, window=w).mean()
+    std = df.rolling(center=False, window=w).std()
     x = df.rolling(center=False, window=1).mean()
     df["ZSCORE"] = (x - mean) / std
     return df["ZSCORE"].astype(float).values
@@ -21,7 +29,7 @@ def calculate_spread(series_1, series_2, hedge_ratio):
 
 
 # Calculate metrics
-def calculate_metrics(series_1, series_2):
+def calculate_metrics(series_1, series_2, window=None):
     coint_flag = 0
     coint_res = coint(series_1, series_2)
     coint_t = coint_res[0]
@@ -30,7 +38,7 @@ def calculate_metrics(series_1, series_2):
     model = sm.OLS(series_1, series_2).fit()
     hedge_ratio = model.params[0]
     spread = calculate_spread(series_1, series_2, hedge_ratio)
-    zscore_list = calculate_zscore(spread)
+    zscore_list = calculate_zscore(spread, window=window)
     if p_value < 0.5 and coint_t < critical_value:
         coint_flag = 1
     return (coint_flag, zscore_list.tolist())
@@ -51,7 +59,10 @@ def calculate_metrics(series_1, series_2):
 def calculate_metrics_with_hedge(series_1, series_2,
                                  frozen_hedge_ratio=None,
                                  frozen_mean=None,
-                                 frozen_std=None):
+                                 frozen_std=None,
+                                 window=None):
+    w = _get_window(window)
+
     if frozen_hedge_ratio is not None:
         # HOLDING mode: use the entry-time hedge_ratio, skip OLS
         hedge_ratio = frozen_hedge_ratio
@@ -74,11 +85,11 @@ def calculate_metrics_with_hedge(series_1, series_2,
         entry_std = frozen_std
     else:
         # ── SEEKING mode: rolling z-score ─────────────────────────────────
-        zscore_list = calculate_zscore(spread)
+        zscore_list = calculate_zscore(spread, window=w)
         # Capture the entry-time mean & std from the latest rolling window
         # so they can be frozen if a trade is opened on this tick.
-        entry_mean = float(spread.rolling(center=False, window=z_score_window).mean().iloc[-1])
-        entry_std  = float(spread.rolling(center=False, window=z_score_window).std().iloc[-1])
+        entry_mean = float(spread.rolling(center=False, window=w).mean().iloc[-1])
+        entry_std  = float(spread.rolling(center=False, window=w).std().iloc[-1])
 
     return (zscore_list if isinstance(zscore_list, list) else zscore_list.tolist(),
             float(hedge_ratio),

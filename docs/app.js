@@ -17,6 +17,68 @@ let _chartDuration  = 48;  // selected chart duration in hours (24h or 48h)
 let _lastChartData = null; // store for PnL estimation
 let _execScrolledUp = false; // user scrolled up in execution terminal
 
+// ── WebSocket (realtime push from server) ─────────────────────────
+let _socket = null;
+let _wsConnected = false;
+
+function initWebSocket() {
+  if (typeof io === "undefined") return; // socket.io CDN not loaded
+  try {
+    _socket = io(API, { transports: ["websocket", "polling"], reconnectionAttempts: 5 });
+
+    _socket.on("connect", () => {
+      _wsConnected = true;
+      console.log("🔌 WebSocket connected");
+      // Stop HTTP polling — WS pushes data now
+      if (executionPolling) { clearInterval(executionPolling); executionPolling = null; }
+      stopPortfolioPolling();
+    });
+
+    _socket.on("disconnect", () => {
+      _wsConnected = false;
+      console.log("🔌 WebSocket disconnected — falling back to polling");
+      // Re-enable polling as fallback
+      if (document.getElementById("btn-stop-bot")?.disabled === false) {
+        startExecutionPolling();
+      }
+      if (getTradeMode() === "multi") {
+        startPortfolioPolling();
+      }
+    });
+
+    // ── Execution status push ──────────────────────────────────────
+    _socket.on("exec_status", (s) => {
+      const term = document.getElementById("execution-terminal");
+      const output = s.output || [];
+
+      if (output.length !== _lastExecOutputLen) {
+        if (output.length > _lastExecOutputLen && _lastExecOutputLen > 0) {
+          const newLines = output.slice(_lastExecOutputLen);
+          term.innerHTML += "\n" + newLines.map(colorLine).join("\n");
+        } else {
+          term.innerHTML = output.map(colorLine).join("\n");
+        }
+        _lastExecOutputLen = output.length;
+        if (!_execScrolledUp) term.scrollTop = term.scrollHeight;
+      }
+
+      _updateEl("bot-message", s.status?.message || (s.running ? "Running" : "Idle"));
+      if (!s.running && document.getElementById("btn-stop-bot")?.disabled === false) {
+        updateBotUI(false);
+      }
+    });
+
+    // ── Portfolio status push ──────────────────────────────────────
+    _socket.on("portfolio_status", (res) => {
+      if (getTradeMode() !== "multi") return; // ignore if not in multi mode
+      _handlePortfolioData(res);
+    });
+
+  } catch (e) {
+    console.warn("WebSocket init failed, using HTTP polling", e);
+  }
+}
+
 // ── Selected-pair Z-Score state ─────────────────────────────────────
 let _selectedPair      = null;  // {sym1, sym2}
 let _zscoreInterval    = null;  // realtime 2s interval
@@ -53,8 +115,8 @@ function toast(msg, type = "info") {
   el.textContent = msg;
   c.appendChild(el);
   setTimeout(() => {
-    el.style.opacity = "0";
-    setTimeout(() => el.remove(), 300);
+    el.classList.add("toast-out");
+    el.addEventListener("animationend", () => el.remove(), { once: true });
   }, 3500);
 }
 
@@ -126,6 +188,41 @@ function setGlobalModeUI(mode, skipSave = false) {
   if (!skipSave) {
     onGlobalModeChange();
   }
+}
+
+// ── Trade Mode (Single / Multi) ─────────────────────────────────
+let _currentTradeMode = localStorage.getItem("trade_mode") || "single";
+
+function setTradeMode(tmode) {
+  _currentTradeMode = tmode;
+  localStorage.setItem("trade_mode", tmode);
+
+  // Persist to server (fire-and-forget)
+  api("/api/config/trade-mode", { method: "POST", body: { trade_mode: tmode } }).catch(() => {});
+
+  // Toggle active class on buttons
+  document.querySelectorAll(".trade-mode-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tmode === tmode);
+  });
+
+  // Show/hide panels based on trade mode
+  const portfolioPanel = document.getElementById("portfolio-panel");
+  const execConfigCard = document.getElementById("exec-config-card");
+
+  if (tmode === "multi") {
+    if (portfolioPanel) portfolioPanel.style.display = "block";
+    if (execConfigCard) execConfigCard.style.display = "none";
+    loadPortfolioStatus();
+    if (!_wsConnected) startPortfolioPolling();
+  } else {
+    if (portfolioPanel) portfolioPanel.style.display = "none";
+    if (execConfigCard) execConfigCard.style.display = "block";
+    stopPortfolioPolling();
+  }
+}
+
+function getTradeMode() {
+  return _currentTradeMode;
 }
 
 async function onGlobalModeChange() {
@@ -465,7 +562,26 @@ function _startSelectedZscore(sym1, sym2) {
 }
 
 function selectPair(sym1, sym2) {
-  // Update form fields
+  // ── Multi mode: auto-fill Add Pair dialog ──────────────────────────────
+  if (getTradeMode() === "multi") {
+    // Pre-fill the dialog with info from the selected pair
+    document.getElementById("ap-ticker1").value = sym1;
+    document.getElementById("ap-ticker2").value = sym2;
+    // Auto-generate pair ID and signal tickers
+    const t1 = sym1.replace("USDT", "");
+    const t2 = sym2.replace("USDT", "");
+    document.getElementById("ap-pair-id").value = `${t1}_${t2}`;
+    document.getElementById("ap-sig-pos").value = sym2;
+    document.getElementById("ap-sig-neg").value = sym1;
+    // Open dialog so user can review/customize before confirming
+    openAddPairDialog();
+    // Scroll to portfolio panel
+    document.getElementById("portfolio-panel").scrollIntoView({ behavior: "smooth" });
+    toast(`📦 ${sym1} / ${sym2} — tùy chỉnh và thêm vào portfolio`, "info");
+    return;
+  }
+
+  // ── Test/Live mode: fill exec config as before ────────────────────────
   document.getElementById("e-ticker1").value = sym1;
   document.getElementById("e-ticker2").value = sym2;
   toast(`Selected: ${sym1} / ${sym2}`, "success");
@@ -988,9 +1104,12 @@ async function startExecution() {
     // Always save config to disk BEFORE spawning the bot subprocess,
     // so the new process reads the latest values (e.g. zscore_stop_loss).
     await saveExecutionConfig();
-    const res = await api("/api/execution/start", { method: "POST" });
+    const res = await api("/api/execution/start", {
+      method: "POST",
+      body: { trade_mode: getTradeMode() },
+    });
     if (res.error) return toast(res.error, "error");
-    toast("Execution bot started", "success");
+    toast(`Execution bot started (${getTradeMode()} mode)`, "success");
     startExecutionPolling();
     updateBotUI(true);
   } catch (e) {
@@ -1061,10 +1180,13 @@ function updateBotUI(running) {
   }
 }
 
+let _lastExecOutputLen = 0;
+
 function startExecutionPolling() {
   if (executionPolling) clearInterval(executionPolling);
+  _lastExecOutputLen = 0;
 
-  // Smart-scroll tracking: only auto-scroll if user is near the bottom
+  // Smart-scroll tracking
   const term = document.getElementById("execution-terminal");
   _execScrolledUp = false;
   term.onscroll = () => {
@@ -1076,13 +1198,27 @@ function startExecutionPolling() {
     try {
       const s = await api("/api/execution/status");
       const term = document.getElementById("execution-terminal");
-      term.innerHTML = s.output.map(colorLine).join("\n");
-      // Only auto-scroll if user hasn't scrolled up
-      if (!_execScrolledUp) {
-        term.scrollTop = term.scrollHeight;
+      const output = s.output || [];
+
+      // Only update if output changed
+      if (output.length !== _lastExecOutputLen) {
+        if (output.length > _lastExecOutputLen && _lastExecOutputLen > 0) {
+          // Append only new lines (fast path)
+          const newLines = output.slice(_lastExecOutputLen);
+          term.innerHTML += "\n" + newLines.map(colorLine).join("\n");
+        } else {
+          // Full re-render (reset or shrunk)
+          term.innerHTML = output.map(colorLine).join("\n");
+        }
+        _lastExecOutputLen = output.length;
+
+        if (!_execScrolledUp) {
+          term.scrollTop = term.scrollHeight;
+        }
       }
+
       if (s.status && s.status.message)
-        document.getElementById("bot-message").textContent = s.status.message;
+        _updateEl("bot-message", s.status.message);
       if (!s.running) {
         updateBotUI(false);
         clearInterval(executionPolling);
@@ -1338,6 +1474,603 @@ document.addEventListener("click", (e) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
+let _portfolioPolling = null;
+let _portfolioLoading = false;  // prevent stacking requests
+
+function startPortfolioPolling() {
+  if (_portfolioPolling) clearInterval(_portfolioPolling);
+  _portfolioPolling = setInterval(loadPortfolioStatus, 3000);
+}
+
+function stopPortfolioPolling() {
+  if (_portfolioPolling) { clearInterval(_portfolioPolling); _portfolioPolling = null; }
+}
+
+async function loadPortfolioStatus() {
+  if (_portfolioLoading) return;
+  _portfolioLoading = true;
+  try {
+    const res = await api("/api/portfolio/full");
+    _handlePortfolioData(res);
+  } catch (e) {
+    /* offline */
+  } finally {
+    _portfolioLoading = false;
+  }
+}
+
+function _handlePortfolioData(res) {
+  const cfgPairs = res.config_pairs || [];
+  const statusPairs = res.live_pairs || [];
+  const portfolio = res.portfolio || {};
+
+  // Build status lookup
+  const statusMap = {};
+  statusPairs.forEach(p => { statusMap[p.pair_id] = p; });
+
+  // Merge
+  const mergedPairs = cfgPairs.map(cfg => {
+    const live = statusMap[cfg.pair_id];
+    return live ? { ...cfg, ...live, _live: true } : { ...cfg, _live: false };
+  });
+  statusPairs.forEach(sp => {
+    if (!cfgPairs.find(c => c.pair_id === sp.pair_id)) {
+      mergedPairs.push({ ...sp, _live: true });
+    }
+  });
+
+  // Update overview
+  _updateEl("portfolio-pair-count", mergedPairs.length);
+  if (portfolio.total_equity != null)
+    _updateEl("pf-equity", "$" + Number(portfolio.total_equity).toFixed(2));
+  if (portfolio.drawdown_pct != null) {
+    _updateEl("pf-drawdown", Number(portfolio.drawdown_pct).toFixed(2) + "%");
+    const ddEl = document.getElementById("pf-drawdown");
+    if (ddEl) ddEl.style.color = portfolio.drawdown_pct > 5 ? "var(--danger)" : "var(--text-secondary)";
+  }
+  if (portfolio.total_pnl != null) {
+    const pnl = Number(portfolio.total_pnl);
+    _updateEl("pf-total-pnl", (pnl >= 0 ? "+" : "") + "$" + pnl.toFixed(4));
+    const pnlEl = document.getElementById("pf-total-pnl");
+    if (pnlEl) pnlEl.style.color = pnl >= 0 ? "var(--success)" : "var(--danger)";
+  }
+
+  let holding = 0, seeking = 0;
+  mergedPairs.forEach(p => {
+    if (p._live && p.kill_switch === 1) holding++;
+    else seeking++;
+  });
+  _updateEl("pf-active-count", holding);
+  _updateEl("pf-seeking-count", seeking);
+
+  // Update Auto Rotation toggle
+  if (res.auto_rotation !== undefined) {
+    const rotEl = document.getElementById("pf-auto-rotation");
+    const rotToggle = document.getElementById("pf-auto-rotation-toggle");
+    if (rotEl) {
+      rotEl.textContent = res.auto_rotation ? "ON" : "OFF";
+      rotEl.style.color = res.auto_rotation ? "var(--success)" : "var(--danger)";
+    }
+    if (rotToggle) {
+      res.auto_rotation ? rotToggle.classList.add("active") : rotToggle.classList.remove("active");
+    }
+  }
+
+  // DOM-diff pair cards
+  _diffPairCards(mergedPairs);
+}
+
+// ── Helpers: minimal DOM updates ────────────────────────────────────────
+function _updateEl(id, value) {
+  const el = document.getElementById(id);
+  if (el && el.textContent !== String(value)) el.textContent = value;
+}
+
+function _diffPairCards(mergedPairs) {
+  const grid = document.getElementById("pair-cards-grid");
+  const placeholder = document.getElementById("pair-card-placeholder");
+  if (!grid) return;
+
+  if (!mergedPairs || mergedPairs.length === 0) {
+    if (placeholder) placeholder.style.display = "block";
+    grid.innerHTML = "";
+    return;
+  }
+  if (placeholder) placeholder.style.display = "none";
+
+  // Build set of current pair IDs
+  const newIds = new Set(mergedPairs.map(p => p.pair_id || "unknown"));
+
+  // Remove cards no longer in list
+  grid.querySelectorAll(".pair-card").forEach(card => {
+    const cardId = card.id.replace("pcard-", "");
+    if (!newIds.has(cardId)) card.remove();
+  });
+
+  // Update or create cards
+  mergedPairs.forEach(p => {
+    const pairId = p.pair_id || "unknown";
+    const existing = document.getElementById("pcard-" + pairId);
+
+    if (existing) {
+      // DOM-diff: update only changed values
+      _diffCardContent(existing, p);
+    } else {
+      // Create new card
+      const card = document.createElement("div");
+      card.id = "pcard-" + pairId;
+      _fillCard(card, p);
+      grid.appendChild(card);
+    }
+  });
+}
+
+function _diffCardContent(card, p) {
+  const ks = p.kill_switch ?? p.status ?? 0;
+  const statusMap = { 0: "seeking", 1: "holding", 2: "closing" };
+  const statusName = p.is_halted ? "halted" : (statusMap[ks] || "seeking");
+  const isLive = p._live;
+
+  // If live-state changed (CONFIGURED→LIVE or vice versa), full re-render
+  const wasLive = card.dataset.live === "1";
+  if (isLive !== wasLive) {
+    _fillCard(card, p);
+    return;
+  }
+
+  // Update class
+  const newClass = `pair-card status-${statusName}`;
+  if (card.className !== newClass) card.className = newClass;
+
+  // Status badge
+  const badge = card.querySelector(".pair-card-status");
+  const statusLabel = isLive ? statusName.toUpperCase() : "CONFIGURED";
+  if (badge && badge.textContent !== statusLabel) {
+    badge.textContent = statusLabel;
+    badge.className = "pair-card-status st-" + statusName;
+  }
+
+  // Metrics (only update if changed)
+  if (isLive) {
+    const zscore = p.current_zscore != null ? Number(p.current_zscore).toFixed(4) : "—";
+    const pnl = p.current_pnl != null ? Number(p.current_pnl) : null;
+    const pnlText = pnl != null ? ((pnl >= 0 ? "+" : "") + "$" + pnl.toFixed(4)) : "—";
+    const holdMin = p.hold_minutes != null ? Number(p.hold_minutes).toFixed(0) + "m" : "—";
+    const trades = String(p.trade_count ?? 0);
+
+    const vals = card.querySelectorAll(".pair-card-metric-value");
+    if (vals[0] && vals[0].textContent !== zscore) vals[0].textContent = zscore;
+    if (vals[1] && vals[1].textContent !== pnlText) {
+      vals[1].textContent = pnlText;
+      vals[1].className = "pair-card-metric-value " + (pnl != null ? (pnl >= 0 ? "val-positive" : "val-negative") : "");
+    }
+    if (vals[2] && vals[2].textContent !== holdMin) vals[2].textContent = holdMin;
+    if (vals[3] && vals[3].textContent !== trades) vals[3].textContent = trades;
+  }
+
+  // Update footer buttons based on state
+  const footer = card.querySelector(".pair-card-footer");
+  if (footer && isLive) {
+    const pairId = p.pair_id;
+    const hasClose = footer.querySelector(".pair-card-close");
+    const hasPause = footer.querySelector(".pair-card-pause");
+    if (ks === 1 && !hasClose) {
+      footer.insertAdjacentHTML("afterbegin",
+        `<button class="pair-card-btn pair-card-close" onclick="closePair('${escHtml(pairId)}')">⏹ Close</button>`);
+    } else if (ks !== 1 && hasClose) {
+      hasClose.remove();
+    }
+    if (ks === 0 && !hasPause) {
+      footer.insertAdjacentHTML("afterbegin",
+        `<button class="pair-card-btn pair-card-pause" onclick="pausePair('${escHtml(pairId)}')">⏸ Pause</button>`);
+    } else if (ks !== 0 && hasPause) {
+      hasPause.remove();
+    }
+  }
+}
+
+function _fillCard(card, p) {
+  const pairId = p.pair_id || "unknown";
+  const ks = p.kill_switch ?? p.status ?? 0;
+  const statusMap = { 0: "seeking", 1: "holding", 2: "closing" };
+  const statusName = p.is_halted ? "halted" : (statusMap[ks] || "seeking");
+  const isLive = p._live;
+
+  card.className = `pair-card status-${statusName}`;
+  card.dataset.live = isLive ? "1" : "0";
+
+  if (isLive) {
+    const zscore = p.current_zscore != null ? Number(p.current_zscore).toFixed(4) : "—";
+    const pnl = p.current_pnl != null ? Number(p.current_pnl) : null;
+    const pnlText = pnl != null ? ((pnl >= 0 ? "+" : "") + "$" + pnl.toFixed(4)) : "—";
+    const pnlClass = pnl != null ? (pnl >= 0 ? "val-positive" : "val-negative") : "";
+    const holdMin = p.hold_minutes != null ? Number(p.hold_minutes).toFixed(0) + "m" : "—";
+    const trades = p.trade_count ?? 0;
+
+    card.innerHTML = `
+      <div class="pair-card-header">
+        <span class="pair-card-id">${escHtml(pairId)}</span>
+        <span class="pair-card-status st-${statusName}">${statusName.toUpperCase()}</span>
+      </div>
+      <div class="pair-card-tickers">${escHtml(p.ticker_1 || "—")} / ${escHtml(p.ticker_2 || "—")}</div>
+      <div class="pair-card-metrics">
+        <div class="pair-card-metric"><span class="pair-card-metric-label">Z-Score</span><span class="pair-card-metric-value">${zscore}</span></div>
+        <div class="pair-card-metric"><span class="pair-card-metric-label">PnL</span><span class="pair-card-metric-value ${pnlClass}">${pnlText}</span></div>
+        <div class="pair-card-metric"><span class="pair-card-metric-label">Hold Time</span><span class="pair-card-metric-value">${holdMin}</span></div>
+        <div class="pair-card-metric"><span class="pair-card-metric-label">Trades</span><span class="pair-card-metric-value">${trades}</span></div>
+      </div>
+      <div class="pair-card-footer">
+        ${ks === 1 ? `<button class="pair-card-btn pair-card-close" onclick="closePair('${escHtml(pairId)}')">⏹ Close</button>` : ''}
+        ${ks === 0 ? `<button class="pair-card-btn pair-card-pause" onclick="pausePair('${escHtml(pairId)}')">⏸ Pause</button>` : ''}
+        ${ks !== 1 ? `<button class="pair-card-btn pair-card-edit" onclick="editPair('${escHtml(pairId)}')">⚙️ Edit</button>` : ''}
+        <button class="pair-card-btn pair-card-log" onclick="openPairLogModal('${escHtml(pairId)}')">📋 Log</button>
+        <button class="pair-card-remove" onclick="removePair('${escHtml(pairId)}')">Remove</button>
+      </div>`;
+  } else {
+    card.innerHTML = `
+      <div class="pair-card-header">
+        <span class="pair-card-id">${escHtml(pairId)}</span>
+        <span class="pair-card-status st-seeking">CONFIGURED</span>
+      </div>
+      <div class="pair-card-tickers">${escHtml(p.ticker_1 || "—")} / ${escHtml(p.ticker_2 || "—")}</div>
+      <div class="pair-card-metrics">
+        <div class="pair-card-metric"><span class="pair-card-metric-label">Capital</span><span class="pair-card-metric-value">$${p.allocated_capital || 50}</span></div>
+        <div class="pair-card-metric"><span class="pair-card-metric-label">Leverage</span><span class="pair-card-metric-value">${p.leverage || 2}x</span></div>
+        <div class="pair-card-metric"><span class="pair-card-metric-label">Status</span><span class="pair-card-metric-value">Idle</span></div>
+      </div>
+      <div class="pair-card-footer">
+        <button class="pair-card-btn pair-card-edit" onclick="editPair('${escHtml(pairId)}')">⚙️ Edit</button>
+        <button class="pair-card-btn pair-card-log" onclick="openPairLogModal('${escHtml(pairId)}')">📋 Log</button>
+        <button class="pair-card-remove" onclick="removePair('${escHtml(pairId)}')">Remove</button>
+      </div>`;
+  }
+}
+
+// ── Pair Log Modal ─────────────────────────────────────────────────
+async function openPairLogModal(pairId) {
+  const modal = document.getElementById("pair-log-modal");
+  const title = document.getElementById("pair-log-title");
+  const content = document.getElementById("pair-log-content");
+
+  title.textContent = `📋 Log — ${pairId}`;
+  content.innerHTML = '<span style="color:var(--text-muted)">Loading...</span>';
+  modal.style.display = "flex";
+
+  try {
+    const res = await api(`/api/portfolio/pair-log?pair_id=${encodeURIComponent(pairId)}&limit=200`);
+    if (res.lines && res.lines.length > 0) {
+      content.innerHTML = res.lines.map(colorLine).join("\n");
+      content.scrollTop = content.scrollHeight;
+    } else {
+      content.innerHTML = '<span style="color:var(--text-muted)">No log entries found for this pair.</span>';
+    }
+  } catch (e) {
+    content.innerHTML = '<span style="color:var(--danger)">Failed to load log.</span>';
+  }
+}
+
+function closePairLogModal() {
+  document.getElementById("pair-log-modal").style.display = "none";
+}
+
+// ── Add Pair Dialog ─────────────────────────────────────────────────
+function openAddPairDialog() {
+  const dlg = document.getElementById("add-pair-dialog");
+  dlg.style.display = "flex";
+  // Auto-generate pair ID from tickers
+  document.getElementById("ap-ticker1").oninput = () => { autoGenPairId(); estimateAddPairPnL(); };
+  document.getElementById("ap-ticker2").oninput = () => { autoGenPairId(); estimateAddPairPnL(); };
+  // P&L estimation triggers on config changes
+  ["ap-capital", "ap-trigger", "ap-leverage", "ap-exit-threshold"].forEach(id => {
+    document.getElementById(id).oninput = estimateAddPairPnL;
+  });
+  // Initial P&L estimation if tickers already filled
+  estimateAddPairPnL();
+}
+
+let _editingPairId = null; // non-null = edit mode
+
+function closeAddPairDialog() {
+  document.getElementById("add-pair-dialog").style.display = "none";
+  _editingPairId = null;
+  // Reset title & button to "Add" mode
+  const titleEl = document.querySelector("#add-pair-dialog span[style*='font-weight:700']");
+  if (titleEl) titleEl.textContent = "🎯 Execution Config";
+  const submitBtn = document.querySelector("#add-pair-dialog .btn-green");
+  if (submitBtn) submitBtn.textContent = "Add to Portfolio";
+  // Re-enable ticker inputs
+  document.getElementById("ap-ticker1").disabled = false;
+  document.getElementById("ap-ticker2").disabled = false;
+}
+
+async function editPair(pairId) {
+  // Fetch current config for this pair
+  try {
+    const res = await api("/api/portfolio/full");
+    const cfgPairs = res.config_pairs || [];
+    const pairCfg = cfgPairs.find(p => p.pair_id === pairId);
+    if (!pairCfg) {
+      toast(`Pair ${pairId} not found in config`, "error");
+      return;
+    }
+
+    // Check if live and holding
+    const livePairs = res.live_pairs || [];
+    const livePair = livePairs.find(p => p.pair_id === pairId);
+    if (livePair && livePair.kill_switch === 1) {
+      toast(`⚠️ ${pairId} đang HOLDING — không thể chỉnh sửa khi đang giữ lệnh`, "error");
+      return;
+    }
+
+    _editingPairId = pairId;
+
+    // Pre-fill all fields
+    document.getElementById("ap-ticker1").value = pairCfg.ticker_1 || "";
+    document.getElementById("ap-ticker2").value = pairCfg.ticker_2 || "";
+    document.getElementById("ap-pair-id").value = pairCfg.pair_id || "";
+    document.getElementById("ap-sig-pos").value = pairCfg.signal_positive_ticker || pairCfg.ticker_2 || "";
+    document.getElementById("ap-sig-neg").value = pairCfg.signal_negative_ticker || pairCfg.ticker_1 || "";
+    document.getElementById("ap-capital").value = pairCfg.allocated_capital ?? 10;
+    document.getElementById("ap-trigger").value = pairCfg.signal_trigger_thresh ?? 1.1;
+    document.getElementById("ap-stoploss").value = pairCfg.stop_loss_fail_safe ?? 0;
+    document.getElementById("ap-zstop").value = pairCfg.zscore_stop_loss ?? 10;
+    document.getElementById("ap-leverage").value = pairCfg.leverage ?? 2;
+    document.getElementById("ap-exit-threshold").value = pairCfg.exit_threshold ?? 0;
+
+    // Toggles
+    const setToggle = (checkId, toggleSel, labelId, val) => {
+      const chk = document.getElementById(checkId);
+      chk.checked = val;
+      const toggle = chk.parentElement.querySelector(".toggle");
+      if (toggle) { val ? toggle.classList.add("active") : toggle.classList.remove("active"); }
+      const lbl = document.getElementById(labelId);
+      if (lbl) lbl.textContent = val ? "Enabled" : "Disabled";
+    };
+    setToggle("ap-limit", null, "ap-limit-label", pairCfg.limit_order_basis !== false);
+    setToggle("ap-autotrade", null, "ap-autotrade-label", pairCfg.auto_trade !== false);
+    const isCustom = pairCfg.custom_thresholds !== false;
+    setToggle("ap-custom", null, "ap-custom-label", isCustom);
+    document.getElementById("ap-custom-panel").style.display = isCustom ? "block" : "none";
+
+    // Disable ticker editing in edit mode (pair_id is tied to tickers)
+    document.getElementById("ap-ticker1").disabled = true;
+    document.getElementById("ap-ticker2").disabled = true;
+
+    // Change dialog title & button
+    const titleEl = document.querySelector("#add-pair-dialog span[style*='font-weight:700']");
+    if (titleEl) titleEl.textContent = `⚙️ Edit Config — ${pairId}`;
+    const submitBtn = document.querySelector("#add-pair-dialog .btn-green");
+    if (submitBtn) submitBtn.textContent = "Save Changes";
+
+    openAddPairDialog();
+  } catch (e) {
+    toast("Cannot connect to server", "error");
+  }
+}
+
+function autoGenPairId() {
+  const t1 = document.getElementById("ap-ticker1").value.trim().replace("USDT", "");
+  const t2 = document.getElementById("ap-ticker2").value.trim().replace("USDT", "");
+  if (t1 && t2) {
+    document.getElementById("ap-pair-id").value = `${t1}_${t2}`;
+    const ticker1Full = document.getElementById("ap-ticker1").value.trim().toUpperCase();
+    const ticker2Full = document.getElementById("ap-ticker2").value.trim().toUpperCase();
+    document.getElementById("ap-sig-pos").value = ticker2Full;
+    document.getElementById("ap-sig-neg").value = ticker1Full;
+  }
+}
+
+// ── P&L Estimation for Add Pair Dialog ──────────────────────────────
+function estimateAddPairPnL() {
+  const panel = document.getElementById("ap-pnl-estimate-panel");
+  if (!panel) return;
+
+  if (!_lastChartData) {
+    panel.style.display = "none";
+    return;
+  }
+
+  const capital = parseFloat(document.getElementById("ap-capital").value) || 0;
+  const entryZ = parseFloat(document.getElementById("ap-trigger").value) || 0;
+  const isCustom = document.getElementById("ap-custom").checked;
+  const exitZ = isCustom ? (parseFloat(document.getElementById("ap-exit-threshold").value) || 0) : 0;
+  const leverage = isCustom ? (parseFloat(document.getElementById("ap-leverage").value) || 1) : 1;
+  const takerFeePct = 0.055; // fixed taker fee
+
+  const sym1 = document.getElementById("ap-ticker1").value.trim().toUpperCase();
+  const sym2 = document.getElementById("ap-ticker2").value.trim().toUpperCase();
+
+  if (capital <= 0 || entryZ <= 0 || !sym1 || !sym2) {
+    panel.style.display = "none";
+    return;
+  }
+
+  // Use chart data if it matches the selected pair
+  const { p1, p2, spreadData, sym1: chartSym1, sym2: chartSym2 } = _lastChartData;
+  if (!p1 || !p2 || !spreadData || p1.length === 0 || spreadData.length === 0) {
+    panel.style.display = "none";
+    return;
+  }
+
+  // Calculate spread standard deviation
+  const meanSpread = spreadData.reduce((a, b) => a + b, 0) / spreadData.length;
+  const varSpread = spreadData.reduce((sq, n) => sq + Math.pow(n - meanSpread, 2), 0) / (spreadData.length - 1);
+  const stdSpread = Math.sqrt(varSpread);
+
+  // Average prices for both legs
+  const avgP1 = p1.reduce((a, b) => a + b, 0) / p1.length;
+
+  const zDelta = Math.abs(entryZ - exitZ);
+  const notionalPerLeg = (capital / 2) * leverage;
+  const spreadDollarMove = zDelta * stdSpread;
+
+  const grossPnL = notionalPerLeg * (spreadDollarMove / avgP1);
+  const totalFees = 4 * notionalPerLeg * (takerFeePct / 100);
+  const netPnL = grossPnL - totalFees;
+  const returnPct = (netPnL / capital) * 100;
+
+  document.getElementById("ap-pnl-est-pair").textContent = `${sym1} / ${sym2}`;
+  document.getElementById("ap-pnl-est-gross").textContent = `$${grossPnL.toFixed(3)}`;
+  document.getElementById("ap-pnl-est-fees").textContent = `$${totalFees.toFixed(3)}`;
+
+  const netEl = document.getElementById("ap-pnl-est-net");
+  const pctEl = document.getElementById("ap-pnl-est-pct");
+
+  netEl.textContent = `$${netPnL.toFixed(3)}`;
+  const leverageLabel = leverage > 1 ? ` (${leverage}x)` : '';
+  pctEl.textContent = `${returnPct > 0 ? '+' : ''}${returnPct.toFixed(2)}%${leverageLabel}`;
+
+  const color = netPnL >= 0 ? "var(--green)" : "var(--red)";
+  netEl.style.color = color;
+  pctEl.style.color = color;
+
+  if (netPnL < 0) {
+    panel.style.background = "linear-gradient(135deg, rgba(239,68,68,.06) 0%, rgba(220,38,38,.04) 100%)";
+    panel.style.borderColor = "rgba(239,68,68,.2)";
+  } else {
+    panel.style.background = "linear-gradient(135deg,rgba(34,211,238,.06) 0%,rgba(16,185,129,.04) 100%)";
+    panel.style.borderColor = "rgba(34,211,238,.15)";
+  }
+
+  panel.style.display = "block";
+}
+
+async function submitAddPair() {
+  const isCustom = document.getElementById("ap-custom").checked;
+  const data = {
+    pair_id: document.getElementById("ap-pair-id").value.trim(),
+    ticker_1: document.getElementById("ap-ticker1").value.trim().toUpperCase(),
+    ticker_2: document.getElementById("ap-ticker2").value.trim().toUpperCase(),
+    signal_positive_ticker: document.getElementById("ap-sig-pos").value.trim().toUpperCase(),
+    signal_negative_ticker: document.getElementById("ap-sig-neg").value.trim().toUpperCase(),
+    allocated_capital: parseFloat(document.getElementById("ap-capital").value) || 10,
+    signal_trigger_thresh: parseFloat(document.getElementById("ap-trigger").value) || 1.1,
+    stop_loss_fail_safe: parseFloat(document.getElementById("ap-stoploss").value) || 0,
+    zscore_stop_loss: parseFloat(document.getElementById("ap-zstop").value) || 10,
+    limit_order_basis: document.getElementById("ap-limit").checked,
+    auto_trade: document.getElementById("ap-autotrade").checked,
+    custom_thresholds: isCustom,
+    leverage: isCustom ? (parseInt(document.getElementById("ap-leverage").value) || 2) : 1,
+    exit_threshold: isCustom ? (parseFloat(document.getElementById("ap-exit-threshold").value) || 0) : 0,
+  };
+
+  // Auto-generate pair_id if empty
+  if (!data.pair_id && data.ticker_1 && data.ticker_2) {
+    data.pair_id = `${data.ticker_1.replace("USDT","")}\_${data.ticker_2.replace("USDT","")}`;
+  }
+  // Auto-fill signal tickers
+  if (!data.signal_positive_ticker) data.signal_positive_ticker = data.ticker_2;
+  if (!data.signal_negative_ticker) data.signal_negative_ticker = data.ticker_1;
+
+  if (!data.pair_id || !data.ticker_1 || !data.ticker_2) {
+    toast("Please fill in Ticker 1 and Ticker 2", "error");
+    return;
+  }
+
+  try {
+    const isEditMode = !!_editingPairId;
+    const endpoint = isEditMode ? "/api/portfolio/edit-pair" : "/api/portfolio/add-pair";
+    const res = await api(endpoint, {
+      method: "POST",
+      body: data,
+    });
+    if (res.error) return toast(res.error, "error");
+    
+    if (isEditMode) {
+      toast(`✅ Config updated for ${data.pair_id}`, "success");
+    } else {
+      toast(`✅ Pair ${data.pair_id} added to portfolio`, "success");
+    }
+    closeAddPairDialog();
+    // Clear form
+    ["ap-pair-id","ap-ticker1","ap-ticker2","ap-sig-pos","ap-sig-neg"].forEach(id => {
+      document.getElementById(id).value = "";
+    });
+    document.getElementById("ap-capital").value = "10";
+    document.getElementById("ap-trigger").value = "1.1";
+    document.getElementById("ap-stoploss").value = "0";
+    document.getElementById("ap-zstop").value = "10";
+    document.getElementById("ap-leverage").value = "2";
+    document.getElementById("ap-exit-threshold").value = "0";
+    document.getElementById("ap-pnl-estimate-panel").style.display = "none";
+    loadPortfolioStatus();
+  } catch (e) {
+    toast("Cannot connect to server", "error");
+  }
+}
+
+// ── Debounce helper ─────────────────────────────────────────────────
+const _actionLocks = {};
+function _lockAction(key) {
+  if (_actionLocks[key]) return false;
+  _actionLocks[key] = true;
+  setTimeout(() => delete _actionLocks[key], 2000);
+  return true;
+}
+
+async function removePair(pairId) {
+  if (!_lockAction("remove_" + pairId)) return;
+  if (!confirm(`Remove pair "${pairId}" from portfolio?`)) { delete _actionLocks["remove_" + pairId]; return; }
+
+  // Optimistic: remove card immediately
+  const card = document.getElementById("pcard-" + pairId);
+  if (card) card.style.opacity = "0.3";
+
+  try {
+    const res = await api("/api/portfolio/remove-pair", {
+      method: "POST", body: { pair_id: pairId },
+    });
+    if (res.error) { if (card) card.style.opacity = "1"; return toast(res.error, "error"); }
+    if (card) card.remove();
+    toast(`Pair ${pairId} removed`, "success");
+  } catch (e) {
+    if (card) card.style.opacity = "1";
+    toast("Cannot connect to server", "error");
+  }
+}
+
+async function closePair(pairId) {
+  if (!_lockAction("close_" + pairId)) return;
+  if (!confirm(`Close all positions for "${pairId}"?`)) { delete _actionLocks["close_" + pairId]; return; }
+
+  // Optimistic: show closing state
+  const btn = document.querySelector(`#pcard-${pairId} .pair-card-close`);
+  if (btn) { btn.disabled = true; btn.innerHTML = "⏳ Closing..."; }
+
+  try {
+    const res = await api("/api/portfolio/close-pair", {
+      method: "POST", body: { pair_id: pairId },
+    });
+    if (res.error) { if (btn) { btn.disabled = false; btn.innerHTML = "⏹ Close"; } return toast(res.error, "error"); }
+    toast(`Closing ${pairId} on Bybit...`, "success");
+    // Let next poll cycle update the card
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.innerHTML = "⏹ Close"; }
+    toast("Cannot connect to server", "error");
+  }
+}
+
+async function pausePair(pairId) {
+  if (!_lockAction("pause_" + pairId)) return;
+
+  // Optimistic: update button immediately
+  const btn = document.querySelector(`#pcard-${pairId} .pair-card-pause`);
+  if (btn) { btn.disabled = true; btn.innerHTML = "⏳ Pausing..."; }
+
+  try {
+    const res = await api("/api/portfolio/pause-pair", {
+      method: "POST", body: { pair_id: pairId },
+    });
+    if (res.error) { if (btn) { btn.disabled = false; btn.innerHTML = "⏸ Pause"; } return toast(res.error, "error"); }
+    toast(`Pause sent to ${pairId}`, "success");
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.innerHTML = "⏸ Pause"; }
+    toast("Cannot connect to server", "error");
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════════
 
@@ -1371,5 +2104,33 @@ async function initDashboard() {
 document.addEventListener("DOMContentLoaded", () => {
   updateClock();
   document.getElementById("api-url-input").value = API;
+
+  // Restore trade mode: localStorage first (instant), then server (source of truth)
+  const savedTradeMode = localStorage.getItem("trade_mode") || "single";
+  setTradeMode(savedTradeMode);
+  // Async-fetch server-persisted mode
+  api("/api/config/trade-mode").then(res => {
+    if (res && res.trade_mode && res.trade_mode !== getTradeMode()) {
+      setTradeMode(res.trade_mode);
+    }
+  }).catch(() => {});
+
   initDashboard();
+  initWebSocket();
 });
+
+// ── Auto Rotation ─────────────────────────────────────────────────────────
+async function toggleAutoRotation() {
+  if (!_lockAction("toggle-rotation")) return;
+  try {
+    const res = await api("/api/portfolio/toggle-rotation", { method: "POST" });
+    if (res.error) {
+      return toast(res.error, "error");
+    }
+    const state = res.auto_rotation ? "ON" : "OFF";
+    toast(`Auto Rotation is now ${state}`, "success");
+    loadPortfolioStatus(); // immediate refresh
+  } catch (e) {
+    toast("Failed to toggle Auto Rotation", "error");
+  }
+}

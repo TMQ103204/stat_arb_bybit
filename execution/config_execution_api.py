@@ -16,16 +16,16 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 # CONFIG VARIABLES
 # mode options: "test" (testnet), "demo" (mainnet demo - real prices, virtual money), "live" (real money)
-mode = "live"
-ticker_1 = "BANANAS31USDT"
-ticker_2 = "SKRUSDT"
+mode = "demo"
+ticker_1 = "IPUSDT"
+ticker_2 = "SNXUSDT"
 signal_positive_ticker = ticker_2
 signal_negative_ticker = ticker_1
 
 limit_order_basis = True # will ensure positions (except for Close) will be placed on limit basis
 auto_trade = True # If False, bot will gracefully stop instead of seeking new trades after a close
 
-tradeable_capital_usdt = 11 # total tradeable capital to be split between both pairs
+tradeable_capital_usdt = 10 # total tradeable capital to be split between both pairs
 leverage = 2               # leverage multiplier (1x to 50x) — applied to both legs via set_leverage
 stop_loss_fail_safe = 0 # stop loss at market order in case of drastic event
 signal_trigger_thresh = 1.1 # z-score threshold which determines trade (must be above zero)
