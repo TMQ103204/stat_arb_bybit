@@ -1406,10 +1406,13 @@ tbody td {
 
 .pair-card-btn {
   background: none;
+  border: 1px solid transparent;
   border-radius: 8px;
   padding: 4px 12px;
+  font-family: "Outfit", sans-serif;
   font-size: 11px;
   font-weight: 600;
+  color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -1439,6 +1442,15 @@ tbody td {
 .pair-card-log:hover {
   background: rgba(96,165,250,0.12);
   border-color: #60a5fa;
+}
+
+.pair-card-edit {
+  border: 1px solid rgba(167,139,250,0.3);
+  color: #a78bfa;
+}
+.pair-card-edit:hover {
+  background: rgba(167,139,250,0.12);
+  border-color: #a78bfa;
 }
 
 .pair-card-remove {

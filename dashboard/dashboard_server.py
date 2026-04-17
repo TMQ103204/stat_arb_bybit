@@ -52,6 +52,96 @@ execution_process = None
 execution_output = []
 execution_lock = threading.Lock()
 
+# ── Portfolio Z-Score background worker ──────────────────────────────────
+_portfolio_zscores = {}       # { pair_id: float(zscore) }
+_portfolio_zscores_lock = threading.Lock()
+
+def _zscore_worker():
+    """Background thread: calculate z-scores for all portfolio config pairs.
+    
+    Auto-pauses when bot is running (execution_process is active).
+    Uses ONLY public API — no private keys, completely safe.
+    """
+    import time as _time
+    import logging as _logging
+    _worker_logger = _logging.getLogger("zscore_worker")
+
+    # Wait for module to fully load (functions defined below)
+    _time.sleep(5)
+
+    while True:
+        try:
+            # If bot is running, pause z-score calculations
+            if execution_process is not None and execution_process.poll() is None:
+                _time.sleep(10)
+                continue
+
+            # Read pairs from portfolio_config.py
+            if not PORTFOLIO_CONFIG.exists():
+                _time.sleep(15)
+                continue
+
+            content = PORTFOLIO_CONFIG.read_text(encoding="utf-8")
+            pairs = _parse_portfolio_config_pairs(content)
+            if not pairs:
+                _time.sleep(15)
+                continue
+
+            # Lazy-init public session (once) — no API keys needed for z-score
+            if not hasattr(_zscore_worker, "_session"):
+                base_path = str(BASE_DIR)
+                exec_path = str(EXECUTION_DIR)
+                if base_path not in sys.path:
+                    sys.path.insert(0, base_path)
+                if exec_path not in sys.path:
+                    sys.path.insert(0, exec_path)
+                from pybit.unified_trading import HTTP as _HTTP
+                _zscore_worker._session = _HTTP()  # public session only, no keys
+                from config_execution_api import retry_api_call
+                _zscore_worker._retry = retry_api_call
+                _worker_logger.info("Z-score worker initialized (public session)")
+
+            sess = _zscore_worker._session
+            retry = _zscore_worker._retry
+
+            from func_get_zscore import get_latest_zscore
+
+            new_zscores = {}
+            for pair in pairs:
+                # Stop if bot started while we were calculating
+                if execution_process is not None and execution_process.poll() is None:
+                    break
+                pid = pair.get("pair_id", "")
+                t1 = pair.get("ticker_1", "")
+                t2 = pair.get("ticker_2", "")
+                tf = pair.get("timeframe", 60)
+                kl = pair.get("kline_limit", 200)
+                zw = pair.get("z_score_window", 21)
+                if not t1 or not t2:
+                    continue
+                try:
+                    result = get_latest_zscore(
+                        t1=t1, t2=t2, session_pub=sess, retry_fn=retry,
+                        tf=tf, kl=kl, window=zw
+                    )
+                    if result is not None:
+                        zscore, _ = result
+                        new_zscores[pid] = round(float(zscore), 4)
+                except Exception as ex:
+                    _worker_logger.debug("Z-score calc failed for %s: %s", pid, ex)
+
+            if new_zscores:
+                with _portfolio_zscores_lock:
+                    _portfolio_zscores.update(new_zscores)
+
+            _time.sleep(15)
+
+        except Exception as e:
+            _worker_logger.warning("Z-score worker error: %s", e)
+            _time.sleep(15)
+
+# Start worker thread
+threading.Thread(target=_zscore_worker, name="ZScoreWorker", daemon=True).start()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # HELPERS
@@ -634,7 +724,11 @@ def execution_status():
 
 @app.route("/api/execution/zscore-live", methods=["GET"])
 def execution_zscore_live():
-    """Get live z-score using the exact same execution pipeline as the bot."""
+    """Get live z-score using the exact same execution pipeline as the bot.
+    
+    Optional query params: sym1, sym2 — to calculate z-score for any pair.
+    Falls back to single-pair config if no params given.
+    """
     try:
         base_path = str(BASE_DIR)
         execution_path = str(EXECUTION_DIR)
@@ -644,15 +738,29 @@ def execution_zscore_live():
             sys.path.insert(0, execution_path)
 
         from func_get_zscore import get_latest_zscore
-        from config_execution_api import ticker_1, ticker_2, signal_trigger_thresh, zscore_stop_loss
 
-        latest = get_latest_zscore()
+        # Accept optional sym1/sym2 for arbitrary pair z-score
+        sym1 = request.args.get("sym1", "").strip().upper()
+        sym2 = request.args.get("sym2", "").strip().upper()
+
+        if sym1 and sym2:
+            # Use provided tickers
+            from config_execution_api import session_public, retry_api_call
+            latest = get_latest_zscore(t1=sym1, t2=sym2,
+                                       session_pub=session_public, retry_fn=retry_api_call)
+            t1_out, t2_out = sym1, sym2
+        else:
+            # Fallback to single-pair config
+            from config_execution_api import ticker_1, ticker_2
+            latest = get_latest_zscore()
+            t1_out, t2_out = ticker_1, ticker_2
+
         if latest is None:
             return jsonify({
                 "available": False,
                 "zscore": None,
-                "ticker_1": ticker_1,
-                "ticker_2": ticker_2,
+                "ticker_1": t1_out,
+                "ticker_2": t2_out,
                 "source": "execution_live_midprice",
                 "reason": "data_unavailable"
             })
@@ -660,16 +768,20 @@ def execution_zscore_live():
         zscore, signal_sign_positive = latest
         zscore = float(zscore)
 
-        return jsonify({
+        resp = {
             "available": True,
             "zscore": zscore,
             "signal_sign_positive": bool(signal_sign_positive),
-            "ticker_1": ticker_1,
-            "ticker_2": ticker_2,
-            "signal_trigger_thresh": float(signal_trigger_thresh),
-            "zscore_stop_loss": float(zscore_stop_loss),
+            "ticker_1": t1_out,
+            "ticker_2": t2_out,
             "source": "execution_live_midprice"
-        })
+        }
+        # Add threshold info only for default pair
+        if not (sym1 and sym2):
+            from config_execution_api import signal_trigger_thresh, zscore_stop_loss
+            resp["signal_trigger_thresh"] = float(signal_trigger_thresh)
+            resp["zscore_stop_loss"] = float(zscore_stop_loss)
+        return jsonify(resp)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1032,6 +1144,41 @@ def get_pair_zscore():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+@app.route("/api/pairs/zscore-batch", methods=["POST"])
+def get_pair_zscore_batch():
+    """Batch z-score for multiple pairs. Uses same 10s cache as single endpoint."""
+    data = request.json or {}
+    pairs_list = data.get("pairs", [])  # [{"sym1":"X","sym2":"Y"}, ...]
+    if not pairs_list or len(pairs_list) > 100:
+        return jsonify({"error": "Provide 1-100 pairs"}), 400
+
+    import math as _math
+    results = {}
+    for item in pairs_list:
+        sym1 = str(item.get("sym1", "")).strip().upper()
+        sym2 = str(item.get("sym2", "")).strip().upper()
+        if not sym1 or not sym2:
+            continue
+        key = f"{sym1}|{sym2}"
+
+        # Check cache first
+        cached = _pairs_zscore_cache.get((sym1, sym2))
+        if cached and (time.time() - cached[1]) < _ZSCORE_TTL:
+            results[key] = cached[0]
+            continue
+
+        try:
+            zscores, _, _ = _compute_pair_zscores(sym1, sym2)
+            last_z = next((float(v) for v in reversed(zscores)
+                           if not _math.isnan(float(v))), None)
+            if last_z is not None:
+                _pairs_zscore_cache[(sym1, sym2)] = (last_z, time.time())
+                results[key] = last_z
+        except Exception:
+            pass  # skip failed pairs silently
+
+    return jsonify({"zscores": results})
 
 
 @app.route("/api/pairs/zscore-history", methods=["GET"])
@@ -1471,6 +1618,9 @@ def get_portfolio_full():
                 pass
     except Exception:
         pass
+    # 3. Background z-scores (for CONFIGURED pairs when bot not running)
+    with _portfolio_zscores_lock:
+        result["zscores"] = dict(_portfolio_zscores)
     return jsonify(result)
 
 

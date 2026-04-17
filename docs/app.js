@@ -478,9 +478,58 @@ async function loadPairs() {
     pairsData = res.pairs || [];
     document.getElementById("pairs-count").textContent = pairsData.length;
     renderPairs();
+    // Start batch z-score polling when pairs are loaded
+    _startBatchZscorePolling();
   } catch (e) {
     /* offline */
   }
+}
+
+// ── Batch Z-Score polling for ALL cointegrated pairs ────────────────
+let _batchZscoreInterval = null;
+
+function _startBatchZscorePolling() {
+  if (_batchZscoreInterval) clearInterval(_batchZscoreInterval);
+
+  const fetchAll = async () => {
+    // Skip if bot is running (check execution status)
+    try {
+      const st = await api("/api/execution/status");
+      if (st && st.running) return;
+    } catch (_) {}
+
+    if (!pairsData.length) return;
+
+    // Build batch request from visible pairs (max 100)
+    const batch = pairsData.slice(0, 100).map(p => ({
+      sym1: p.sym_1, sym2: p.sym_2
+    }));
+
+    try {
+      const res = await api("/api/pairs/zscore-batch", {
+        method: "POST", body: { pairs: batch }
+      });
+      if (!res || !res.zscores) return;
+
+      // Update cache + DOM cells
+      for (const [key, z] of Object.entries(res.zscores)) {
+        const zVal = Number(z);
+        const text = zVal.toFixed(3);
+        const colorCls = zVal >= 0 ? "zscore-pos" : "zscore-neg";
+        _zscoreCache[key] = { z: zVal, text };
+
+        const cell = document.getElementById("z-" + key);
+        if (cell) {
+          cell.textContent = text;
+          cell.classList.remove("zscore-pos", "zscore-neg");
+          cell.classList.add(colorCls);
+        }
+      }
+    } catch (_) { /* offline */ }
+  };
+
+  fetchAll();
+  _batchZscoreInterval = setInterval(fetchAll, 15000);
 }
 
 function renderPairs() {
@@ -1476,6 +1525,7 @@ document.addEventListener("click", (e) => {
 // ═══════════════════════════════════════════════════════════════════
 let _portfolioPolling = null;
 let _portfolioLoading = false;  // prevent stacking requests
+const _portfolioZscoreCache = {};  // persistent cache: { pair_id: zscore }
 
 function startPortfolioPolling() {
   if (_portfolioPolling) clearInterval(_portfolioPolling);
@@ -1509,9 +1559,17 @@ function _handlePortfolioData(res) {
   statusPairs.forEach(p => { statusMap[p.pair_id] = p; });
 
   // Merge
+  const bgZscores = res.zscores || {};
+  // Update persistent cache with any new z-scores from server
+  for (const [pid, z] of Object.entries(bgZscores)) {
+    _portfolioZscoreCache[pid] = z;
+  }
   const mergedPairs = cfgPairs.map(cfg => {
     const live = statusMap[cfg.pair_id];
-    return live ? { ...cfg, ...live, _live: true } : { ...cfg, _live: false };
+    if (live) return { ...cfg, ...live, _live: true };
+    // Not live — use persistent z-score cache (never loses value)
+    const bgZ = _portfolioZscoreCache[cfg.pair_id];
+    return { ...cfg, _live: false, _bg_zscore: bgZ ?? null };
   });
   statusPairs.forEach(sp => {
     if (!cfgPairs.find(c => c.pair_id === sp.pair_id)) {
@@ -1646,6 +1704,21 @@ function _diffCardContent(card, p) {
     }
     if (vals[2] && vals[2].textContent !== holdMin) vals[2].textContent = holdMin;
     if (vals[3] && vals[3].textContent !== trades) vals[3].textContent = trades;
+  } else {
+    // CONFIGURED card: update background z-score
+    const bgEl = card.querySelector("[data-field='bg_zscore']");
+    if (bgEl && p._bg_zscore != null) {
+      const zText = Number(p._bg_zscore).toFixed(4);
+      if (bgEl.textContent !== zText) {
+        bgEl.textContent = zText;
+        bgEl.style.color = p._bg_zscore >= 0 ? "var(--success)" : "var(--danger)";
+      }
+    } else if (bgEl && p._bg_zscore == null) {
+      if (bgEl.textContent !== "—") {
+        bgEl.textContent = "—";
+        bgEl.style.color = "var(--text-muted)";
+      }
+    }
   }
 
   // Update footer buttons based on state
@@ -1714,9 +1787,10 @@ function _fillCard(card, p) {
       </div>
       <div class="pair-card-tickers">${escHtml(p.ticker_1 || "—")} / ${escHtml(p.ticker_2 || "—")}</div>
       <div class="pair-card-metrics">
+        <div class="pair-card-metric"><span class="pair-card-metric-label">Z-Score</span><span class="pair-card-metric-value" data-field="bg_zscore" style="color:${p._bg_zscore != null ? (p._bg_zscore >= 0 ? 'var(--success)' : 'var(--danger)') : 'var(--text-muted)'}">${p._bg_zscore != null ? Number(p._bg_zscore).toFixed(4) : '—'}</span></div>
         <div class="pair-card-metric"><span class="pair-card-metric-label">Capital</span><span class="pair-card-metric-value">$${p.allocated_capital || 50}</span></div>
         <div class="pair-card-metric"><span class="pair-card-metric-label">Leverage</span><span class="pair-card-metric-value">${p.leverage || 2}x</span></div>
-        <div class="pair-card-metric"><span class="pair-card-metric-label">Status</span><span class="pair-card-metric-value">Idle</span></div>
+        <div class="pair-card-metric"><span class="pair-card-metric-label">Entry</span><span class="pair-card-metric-value">${p.signal_trigger_thresh || 1.1}</span></div>
       </div>
       <div class="pair-card-footer">
         <button class="pair-card-btn pair-card-edit" onclick="editPair('${escHtml(pairId)}')">⚙️ Edit</button>
