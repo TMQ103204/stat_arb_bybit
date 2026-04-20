@@ -193,7 +193,7 @@ class PairTrader:
                     long_t, short_t = self._resolve_leg_tickers()
                     close_all_positions(
                         kill_switch=self.s.kill_switch,
-                        ticker_1=long_t, ticker_2=short_t,
+                        pos_ticker=long_t, neg_ticker=short_t,
                         session_priv=self.session_priv,
                         retry_fn=self.retry_fn,
                     )
@@ -387,6 +387,23 @@ class PairTrader:
                 self.logger.critical("CLOSE VERIFICATION FAILED: positions still open. Retrying...")
                 s.kill_switch = 2
                 return
+
+            # ── Read ACTUAL post-close PnL from Bybit ─────────────────────────
+            # last_close_pnl from HOLDING tick uses unrealisedPnl which does NOT
+            # include closing fees/slippage. Re-read cumRealisedPnl after close
+            # to get the true trade result.
+            try:
+                long_t, short_t = self._resolve_leg_tickers()
+                final_realised_long, final_realised_short = \
+                    snapshot_cumrealised_pnl(long_t, short_t, session_priv=self.session_priv)
+                actual_pnl = (final_realised_long - s.baseline_realised_long) + \
+                             (final_realised_short - s.baseline_realised_short)
+                self.logger.info(
+                    "Post-close actual PnL: %.4f USDT (pre-close estimate was %.4f)",
+                    actual_pnl, s.last_close_pnl)
+                s.last_close_pnl = actual_pnl
+            except Exception as e:
+                self.logger.warning("Could not read post-close PnL: %s (using pre-close estimate)", e)
 
         # ── Session loss circuit breaker ──────────────────────────────────────
         if s.last_close_pnl < 0:

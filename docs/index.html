@@ -570,6 +570,7 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
               <span style="font-size:13px;font-weight:600;color:var(--text-primary)">📊 P&L Estimate</span>
               <span id="pnl-est-pair" style="font-size:11px;color:var(--cyan);font-family:'JetBrains Mono',monospace"></span>
+              <span id="pnl-est-loading" style="font-size:11px;color:var(--text-muted);margin-left:auto;display:none">⏳ Calculating...</span>
             </div>
             <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
               <div>
@@ -588,6 +589,33 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
                 <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">% Return</div>
                 <div id="pnl-est-pct" style="font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace">—</div>
               </div>
+            </div>
+            <!-- Backtest + Metrics Row -->
+            <div id="pnl-est-backtest-row" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06)">
+              <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">
+                <div>
+                  <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">%/Z-Score</div>
+                  <div id="pnl-est-ppz" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace;color:var(--cyan)">—</div>
+                </div>
+                <div>
+                  <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">Min Z (B/E)</div>
+                  <div id="pnl-est-minz" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace;color:#f59e0b">—</div>
+                </div>
+                <div>
+                  <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">Current Z</div>
+                  <div id="pnl-est-curz" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace">—</div>
+                </div>
+                <div>
+                  <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">Win Rate</div>
+                  <div id="pnl-est-wr" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace">—</div>
+                </div>
+                <div>
+                  <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">Profit Factor</div>
+                  <div id="pnl-est-pf" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace">—</div>
+                </div>
+              </div>
+              <!-- Warning banner -->
+              <div id="pnl-est-warning" style="display:none;margin-top:10px;padding:8px 12px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:8px;font-size:11px;color:#f87171"></div>
             </div>
           </div>
         </div>
@@ -692,6 +720,13 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
             <div class="metric-chip">
               <span class="metric-label">Seeking</span>
               <span class="metric-value" id="pf-seeking-count">0</span>
+            </div>
+            <div class="metric-chip" style="cursor:pointer" onclick="toggleAutoRotation()">
+              <span class="metric-label">Auto Rotation</span>
+              <span class="metric-value" id="pf-auto-rotation" style="display:flex;align-items:center;gap:10px;font-size:13px">
+                <span class="toggle" id="pf-rotation-toggle"></span>
+                <span id="pf-rotation-label">OFF</span>
+              </span>
             </div>
           </div>
 
@@ -815,6 +850,7 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
               <span style="font-size:13px;font-weight:600;color:var(--text-primary)">📊 P&L Estimate</span>
               <span id="ap-pnl-est-pair" style="font-size:11px;color:var(--cyan);font-family:'JetBrains Mono',monospace"></span>
+              <span id="ap-pnl-est-loading" style="font-size:11px;color:var(--text-muted);margin-left:auto;display:none">⏳ Calculating...</span>
             </div>
             <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
               <div>
@@ -833,6 +869,33 @@ Ready to run strategy pipeline...\n\nSteps:\n  1. Get tradeable symbols\n  2. St
                 <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">% Return</div>
                 <div id="ap-pnl-est-pct" style="font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace">—</div>
               </div>
+            </div>
+            <!-- Backtest + Metrics Row -->
+            <div id="ap-pnl-est-backtest-row" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06)">
+              <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">
+                <div>
+                  <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">%/Z-Score</div>
+                  <div id="ap-pnl-est-ppz" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace;color:var(--cyan)">—</div>
+                </div>
+                <div>
+                  <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">Min Z (B/E)</div>
+                  <div id="ap-pnl-est-minz" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace;color:#f59e0b">—</div>
+                </div>
+                <div>
+                  <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">Current Z</div>
+                  <div id="ap-pnl-est-curz" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace">—</div>
+                </div>
+                <div>
+                  <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">Win Rate</div>
+                  <div id="ap-pnl-est-wr" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace">—</div>
+                </div>
+                <div>
+                  <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px">Profit Factor</div>
+                  <div id="ap-pnl-est-pf" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace">—</div>
+                </div>
+              </div>
+              <!-- Warning banner -->
+              <div id="ap-pnl-est-warning" style="display:none;margin-top:10px;padding:8px 12px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:8px;font-size:11px;color:#f87171"></div>
             </div>
           </div>
           <div style="display:flex;gap:10px;margin-top:18px;justify-content:flex-end">

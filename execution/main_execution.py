@@ -270,6 +270,22 @@ if __name__ == "__main__":
                         )
                         kill_switch = 2  # force retry
                         continue
+
+                    # ── Read ACTUAL post-close PnL from Bybit ─────────────────
+                    # last_close_pnl uses unrealisedPnl which does NOT include
+                    # closing fees/slippage. Re-read cumRealisedPnl after close.
+                    try:
+                        long_ticker  = signal_positive_ticker if signal_side == "positive" else signal_negative_ticker
+                        short_ticker = signal_negative_ticker if signal_side == "positive" else signal_positive_ticker
+                        final_realised_long, final_realised_short = snapshot_cumrealised_pnl(long_ticker, short_ticker)
+                        actual_pnl = (final_realised_long - baseline_realised_long) + \
+                                     (final_realised_short - baseline_realised_short)
+                        logger.info(
+                            "Post-close actual PnL: %.4f USDT (pre-close estimate was %.4f)",
+                            actual_pnl, last_close_pnl)
+                        last_close_pnl = actual_pnl
+                    except Exception as e:
+                        logger.warning("Could not read post-close PnL: %s (using pre-close estimate)", e)
                 # ──────────────────────────────────────────────────────────────────
 
                 # ── Bug #1 fix: session loss circuit breaker ──────────────────────

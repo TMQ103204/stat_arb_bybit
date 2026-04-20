@@ -37,16 +37,14 @@ function initWebSocket() {
     _socket.on("disconnect", () => {
       _wsConnected = false;
       console.log("🔌 WebSocket disconnected — falling back to polling");
-      // Re-enable polling as fallback
+      // Wait for auto-reconnect
       if (document.getElementById("btn-stop-bot")?.disabled === false) {
-        startExecutionPolling();
-      }
-      if (getTradeMode() === "multi") {
-        startPortfolioPolling();
+        console.warn("WebSocket disconnected while running.");
       }
     });
 
     // ── Execution status push ──────────────────────────────────────
+    let _lastExecOutputLen = 0;
     _socket.on("exec_status", (s) => {
       const term = document.getElementById("execution-terminal");
       const output = s.output || [];
@@ -1054,84 +1052,171 @@ function renderBacktestChart(data, cols) {
   estimatePnL();
 }
 
-// ── P&L Estimation ──────────────────────────────────────────────────
-function estimatePnL() {
-  const panel = document.getElementById("pnl-estimate-panel");
+// ── P&L Estimation (API-based) ──────────────────────────────────────
+// Shared helper: renders estimation data into a panel (works for both
+// Execution Config panel and Add Pair dialog panel by passing id prefix).
+let _pnlEstimateTimer = null;     // debounce timer for Execution Config
+let _apPnlEstimateTimer = null;   // debounce timer for Add Pair dialog
+let _pnlAbortController = null;   // abort in-flight request for Execution Config
+let _apPnlAbortController = null; // abort in-flight request for Add Pair dialog
+
+function _renderPnlEstimate(d, prefix) {
+  // prefix = "" for Execution Config, "ap-" for Add Pair dialog
+  const panel     = document.getElementById(`${prefix}pnl-estimate-panel`);
+  const loadingEl = document.getElementById(`${prefix}pnl-est-loading`);
+  const btRow     = document.getElementById(`${prefix}pnl-est-backtest-row`);
+  const warnEl    = document.getElementById(`${prefix}pnl-est-warning`);
   if (!panel) return;
-  
-  if (!_lastChartData) {
-    panel.style.display = "none";
-    return;
-  }
-  
-  const capital = parseFloat(document.getElementById("e-capital").value) || 0;
-  const entryZ = parseFloat(document.getElementById("e-trigger").value) || 0;
-  const isCustom = document.getElementById("e-custom-thresholds").checked;
-  const exitZ = isCustom ? (parseFloat(document.getElementById("e-exit-threshold").value) || 0) : 0;
-  const takerFeePct = parseFloat(document.getElementById("e-taker-fee").value) || 0.055;
-  const leverage = isCustom ? (parseFloat(document.getElementById("e-leverage").value) || 1) : 1;
 
-  if (capital <= 0 || entryZ <= 0) {
-    panel.style.display = "none";
-    return;
-  }
+  if (loadingEl) loadingEl.style.display = "none";
 
-  const { p1, p2, spreadData, sym1, sym2 } = _lastChartData;
-  if (!p1 || !p2 || !spreadData || p1.length === 0 || spreadData.length === 0) return;
+  // Main metrics
+  document.getElementById(`${prefix}pnl-est-pair`).textContent = d.pair || "";
+  document.getElementById(`${prefix}pnl-est-gross`).textContent = `$${d.gross_pnl.toFixed(4)}`;
+  document.getElementById(`${prefix}pnl-est-fees`).textContent = `$${d.total_fees.toFixed(4)}`;
 
-  // Calculate spread standard deviation
-  const meanSpread = spreadData.reduce((a, b) => a + b, 0) / spreadData.length;
-  const varSpread = spreadData.reduce((sq, n) => sq + Math.pow(n - meanSpread, 2), 0) / (spreadData.length - 1);
-  const stdSpread = Math.sqrt(varSpread);
-
-  // Average prices for both legs
-  const avgP1 = p1.reduce((a, b) => a + b, 0) / p1.length;
-  const avgP2 = p2.reduce((a, b) => a + b, 0) / p2.length;
-
-  // Stat-arb P&L estimation:
-  // - Capital is split 50/50 across two legs
-  // - Each leg's notional = (capital / 2) * leverage
-  // - When z-score moves from entryZ to exitZ, spread moves by zDelta * stdSpread
-  // - P&L on leg1 ≈ notional_leg1 * (spread_dollar_move / avgP1)
-  // - This is an approximation; real P&L depends on actual price movements
-  // - Total fees = 4 legs (open+close × 2 symbols) × notional × fee%
-  
-  const zDelta = Math.abs(entryZ - exitZ);
-  const notionalPerLeg = (capital / 2) * leverage;
-  const spreadDollarMove = zDelta * stdSpread;
-  
-  // Gross P&L: spread movement relative to reference price × notional
-  const grossPnL = notionalPerLeg * (spreadDollarMove / avgP1);
-  
-  // Fees: 4 order fills (open leg1, open leg2, close leg1, close leg2)
-  const totalFees = 4 * notionalPerLeg * (takerFeePct / 100);
-  const netPnL = grossPnL - totalFees;
-  const returnPct = (netPnL / capital) * 100;
-
-  document.getElementById("pnl-est-pair").textContent = `${sym1} / ${sym2}`;
-  document.getElementById("pnl-est-gross").textContent = `$${grossPnL.toFixed(3)}`;
-  document.getElementById("pnl-est-fees").textContent = `$${totalFees.toFixed(3)}`;
-  
-  const netEl = document.getElementById("pnl-est-net");
-  const pctEl = document.getElementById("pnl-est-pct");
-  
-  netEl.textContent = `$${netPnL.toFixed(3)}`;
-  const leverageLabel = leverage > 1 ? ` (${leverage}x)` : '';
-  pctEl.textContent = `${returnPct > 0 ? '+' : ''}${returnPct.toFixed(2)}%${leverageLabel}`;
-  
-  const color = netPnL >= 0 ? "var(--green)" : "var(--red)";
+  const netEl = document.getElementById(`${prefix}pnl-est-net`);
+  const pctEl = document.getElementById(`${prefix}pnl-est-pct`);
+  netEl.textContent = `$${d.net_pnl.toFixed(4)}`;
+  const levLabel = d.config.leverage > 1 ? ` (${d.config.leverage}x)` : "";
+  pctEl.textContent = `${d.return_pct > 0 ? "+" : ""}${d.return_pct.toFixed(3)}%${levLabel}`;
+  const color = d.net_pnl >= 0 ? "var(--green)" : "var(--red)";
   netEl.style.color = color;
   pctEl.style.color = color;
-  
-  if (netPnL < 0) {
+
+  // Panel background
+  if (d.net_pnl < 0) {
     panel.style.background = "linear-gradient(135deg, rgba(239,68,68,.06) 0%, rgba(220,38,38,.04) 100%)";
     panel.style.borderColor = "rgba(239,68,68,.2)";
   } else {
     panel.style.background = "linear-gradient(135deg,rgba(34,211,238,.06) 0%,rgba(16,185,129,.04) 100%)";
     panel.style.borderColor = "rgba(34,211,238,.15)";
   }
-  
+
+  // Backtest + advanced metrics row
+  if (btRow) {
+    // %/Z-Score
+    document.getElementById(`${prefix}pnl-est-ppz`).textContent = `${d.pct_per_zscore.toFixed(4)}%`;
+
+    // Min Z breakeven
+    const minzEl = document.getElementById(`${prefix}pnl-est-minz`);
+    minzEl.textContent = d.min_z_breakeven < 99 ? d.min_z_breakeven.toFixed(2) : "N/A";
+
+    // Current Z
+    const curzEl = document.getElementById(`${prefix}pnl-est-curz`);
+    curzEl.textContent = d.current_zscore.toFixed(4);
+    const absZ = Math.abs(d.current_zscore);
+    curzEl.style.color = absZ > d.config.entry_z ? "var(--green)" : "var(--text-muted)";
+
+    // Win Rate
+    const wrEl = document.getElementById(`${prefix}pnl-est-wr`);
+    const bt = d.backtest;
+    wrEl.textContent = bt.total_trades > 0 ? `${(bt.win_rate * 100).toFixed(0)}% (${bt.total_trades})` : "—";
+    wrEl.style.color = bt.win_rate >= 0.5 ? "var(--green)" : "var(--red)";
+
+    // Profit Factor
+    const pfEl = document.getElementById(`${prefix}pnl-est-pf`);
+    pfEl.textContent = bt.total_trades > 0 ? `${bt.profit_factor.toFixed(2)}×` : "—";
+    pfEl.style.color = bt.profit_factor >= 1.0 ? "var(--green)" : "var(--red)";
+
+    // Warning messages
+    const warnings = [];
+    if (d.net_pnl < 0) {
+      warnings.push(`⚠️ Net PnL âm: phí giao dịch ($${d.total_fees.toFixed(4)}) vượt gross profit ($${d.gross_pnl.toFixed(4)}). Cần entry z ≥ ${d.min_z_breakeven.toFixed(2)} để hòa vốn.`);
+    }
+    if (bt.total_trades > 0 && bt.avg_net_profit < 0) {
+      warnings.push(`⚠️ Backtest lỗ trung bình ${bt.avg_net_profit.toFixed(2)}%/trade trên ${bt.total_trades} trade — pair này KHÔNG profitable sau phí.`);
+    }
+    if (bt.total_trades === 0) {
+      warnings.push(`ℹ️ Không có trade nào trong backtest (z-score không vượt entry threshold ${d.config.entry_z} trong ${d.config.kline_limit} candles).`);
+    }
+    if (warnEl) {
+      if (warnings.length > 0) {
+        warnEl.innerHTML = warnings.join("<br>");
+        warnEl.style.display = "block";
+      } else {
+        warnEl.style.display = "none";
+      }
+    }
+
+    btRow.style.display = "block";
+  }
+
   panel.style.display = "block";
+}
+
+async function _fetchPnlEstimate(sym1, sym2, capital, leverage, entryZ, exitZ, prefix, abortSignal) {
+  const loadingEl = document.getElementById(`${prefix}pnl-est-loading`);
+  const panel = document.getElementById(`${prefix}pnl-estimate-panel`);
+  if (!panel) return;
+
+  if (loadingEl) {
+    loadingEl.textContent = "⏳ Calculating...";
+    loadingEl.style.display = "inline";
+  }
+  panel.style.display = "block";
+
+  try {
+    const res = await fetch(`${API}/api/estimate-pnl`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sym1, sym2, capital, leverage, entry_z: entryZ, exit_z: exitZ }),
+      signal: abortSignal,
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      if (loadingEl) {
+        loadingEl.textContent = res.status === 404
+          ? "❌ Endpoint not found — restart server"
+          : `❌ HTTP ${res.status}: ${txt.slice(0, 80)}`;
+        loadingEl.style.display = "inline";
+      }
+      return;
+    }
+    const d = await res.json();
+    if (d.error) {
+      if (loadingEl) {
+        loadingEl.textContent = `❌ ${d.error}`;
+        loadingEl.style.display = "inline";
+      }
+      return;
+    }
+    _renderPnlEstimate(d, prefix);
+  } catch (e) {
+    if (e.name === "AbortError") return; // cancelled — a newer request superseded this one
+    console.error("PnL estimate error:", e);
+    if (loadingEl) {
+      loadingEl.textContent = `❌ ${e.message || "Network error"}`;
+      loadingEl.style.display = "inline";
+    }
+  }
+}
+
+function estimatePnL() {
+  const panel = document.getElementById("pnl-estimate-panel");
+  if (!panel) return;
+
+  const sym1 = (document.getElementById("e-ticker1").value || "").trim().toUpperCase();
+  const sym2 = (document.getElementById("e-ticker2").value || "").trim().toUpperCase();
+  const capital = parseFloat(document.getElementById("e-capital").value) || 0;
+  const entryZ = parseFloat(document.getElementById("e-trigger").value) || 0;
+  const isCustom = document.getElementById("e-custom-thresholds").checked;
+  const exitZ = isCustom ? (parseFloat(document.getElementById("e-exit-threshold").value) || 0) : 0;
+  const leverage = isCustom ? (parseFloat(document.getElementById("e-leverage").value) || 1) : 1;
+
+  if (!sym1 || !sym2 || capital <= 0 || entryZ <= 0) {
+    panel.style.display = "none";
+    return;
+  }
+
+  // Debounce: cancel previous timer and in-flight request
+  if (_pnlEstimateTimer) clearTimeout(_pnlEstimateTimer);
+  if (_pnlAbortController) _pnlAbortController.abort();
+
+  _pnlEstimateTimer = setTimeout(() => {
+    _pnlAbortController = new AbortController();
+    _fetchPnlEstimate(sym1, sym2, capital, leverage, entryZ, exitZ, "", _pnlAbortController.signal);
+  }, 500);
 }
 
 // Attach auto-save listeners to config inputs on blur/change
@@ -1159,7 +1244,6 @@ async function startExecution() {
     });
     if (res.error) return toast(res.error, "error");
     toast(`Execution bot started (${getTradeMode()} mode)`, "success");
-    startExecutionPolling();
     updateBotUI(true);
   } catch (e) {
     toast("Cannot connect to local server", "error");
@@ -1229,61 +1313,11 @@ function updateBotUI(running) {
   }
 }
 
-let _lastExecOutputLen = 0;
-
-function startExecutionPolling() {
-  if (executionPolling) clearInterval(executionPolling);
-  _lastExecOutputLen = 0;
-
-  // Smart-scroll tracking
-  const term = document.getElementById("execution-terminal");
-  _execScrolledUp = false;
-  term.onscroll = () => {
-    const atBottom = term.scrollHeight - term.scrollTop - term.clientHeight < 40;
-    _execScrolledUp = !atBottom;
-  };
-
-  executionPolling = setInterval(async () => {
-    try {
-      const s = await api("/api/execution/status");
-      const term = document.getElementById("execution-terminal");
-      const output = s.output || [];
-
-      // Only update if output changed
-      if (output.length !== _lastExecOutputLen) {
-        if (output.length > _lastExecOutputLen && _lastExecOutputLen > 0) {
-          // Append only new lines (fast path)
-          const newLines = output.slice(_lastExecOutputLen);
-          term.innerHTML += "\n" + newLines.map(colorLine).join("\n");
-        } else {
-          // Full re-render (reset or shrunk)
-          term.innerHTML = output.map(colorLine).join("\n");
-        }
-        _lastExecOutputLen = output.length;
-
-        if (!_execScrolledUp) {
-          term.scrollTop = term.scrollHeight;
-        }
-      }
-
-      if (s.status && s.status.message)
-        _updateEl("bot-message", s.status.message);
-      if (!s.running) {
-        updateBotUI(false);
-        clearInterval(executionPolling);
-        executionPolling = null;
-      }
-    } catch (e) {
-      /* offline */
-    }
-  }, 2000);
-}
-
+  // Smart-scroll tracking handled in initialization
 async function checkBotStatus() {
   try {
     const s = await api("/api/execution/status");
     updateBotUI(s.running);
-    if (s.running) startExecutionPolling();
     if (s.status && s.status.message)
       document.getElementById("bot-message").textContent = s.status.message;
   } catch (e) {
@@ -1939,74 +1973,27 @@ function estimateAddPairPnL() {
   const panel = document.getElementById("ap-pnl-estimate-panel");
   if (!panel) return;
 
-  if (!_lastChartData) {
-    panel.style.display = "none";
-    return;
-  }
-
+  const sym1 = (document.getElementById("ap-ticker1").value || "").trim().toUpperCase();
+  const sym2 = (document.getElementById("ap-ticker2").value || "").trim().toUpperCase();
   const capital = parseFloat(document.getElementById("ap-capital").value) || 0;
   const entryZ = parseFloat(document.getElementById("ap-trigger").value) || 0;
   const isCustom = document.getElementById("ap-custom").checked;
   const exitZ = isCustom ? (parseFloat(document.getElementById("ap-exit-threshold").value) || 0) : 0;
   const leverage = isCustom ? (parseFloat(document.getElementById("ap-leverage").value) || 1) : 1;
-  const takerFeePct = 0.055; // fixed taker fee
 
-  const sym1 = document.getElementById("ap-ticker1").value.trim().toUpperCase();
-  const sym2 = document.getElementById("ap-ticker2").value.trim().toUpperCase();
-
-  if (capital <= 0 || entryZ <= 0 || !sym1 || !sym2) {
+  if (!sym1 || !sym2 || capital <= 0 || entryZ <= 0) {
     panel.style.display = "none";
     return;
   }
 
-  // Use chart data if it matches the selected pair
-  const { p1, p2, spreadData, sym1: chartSym1, sym2: chartSym2 } = _lastChartData;
-  if (!p1 || !p2 || !spreadData || p1.length === 0 || spreadData.length === 0) {
-    panel.style.display = "none";
-    return;
-  }
+  // Debounce: cancel previous timer and in-flight request
+  if (_apPnlEstimateTimer) clearTimeout(_apPnlEstimateTimer);
+  if (_apPnlAbortController) _apPnlAbortController.abort();
 
-  // Calculate spread standard deviation
-  const meanSpread = spreadData.reduce((a, b) => a + b, 0) / spreadData.length;
-  const varSpread = spreadData.reduce((sq, n) => sq + Math.pow(n - meanSpread, 2), 0) / (spreadData.length - 1);
-  const stdSpread = Math.sqrt(varSpread);
-
-  // Average prices for both legs
-  const avgP1 = p1.reduce((a, b) => a + b, 0) / p1.length;
-
-  const zDelta = Math.abs(entryZ - exitZ);
-  const notionalPerLeg = (capital / 2) * leverage;
-  const spreadDollarMove = zDelta * stdSpread;
-
-  const grossPnL = notionalPerLeg * (spreadDollarMove / avgP1);
-  const totalFees = 4 * notionalPerLeg * (takerFeePct / 100);
-  const netPnL = grossPnL - totalFees;
-  const returnPct = (netPnL / capital) * 100;
-
-  document.getElementById("ap-pnl-est-pair").textContent = `${sym1} / ${sym2}`;
-  document.getElementById("ap-pnl-est-gross").textContent = `$${grossPnL.toFixed(3)}`;
-  document.getElementById("ap-pnl-est-fees").textContent = `$${totalFees.toFixed(3)}`;
-
-  const netEl = document.getElementById("ap-pnl-est-net");
-  const pctEl = document.getElementById("ap-pnl-est-pct");
-
-  netEl.textContent = `$${netPnL.toFixed(3)}`;
-  const leverageLabel = leverage > 1 ? ` (${leverage}x)` : '';
-  pctEl.textContent = `${returnPct > 0 ? '+' : ''}${returnPct.toFixed(2)}%${leverageLabel}`;
-
-  const color = netPnL >= 0 ? "var(--green)" : "var(--red)";
-  netEl.style.color = color;
-  pctEl.style.color = color;
-
-  if (netPnL < 0) {
-    panel.style.background = "linear-gradient(135deg, rgba(239,68,68,.06) 0%, rgba(220,38,38,.04) 100%)";
-    panel.style.borderColor = "rgba(239,68,68,.2)";
-  } else {
-    panel.style.background = "linear-gradient(135deg,rgba(34,211,238,.06) 0%,rgba(16,185,129,.04) 100%)";
-    panel.style.borderColor = "rgba(34,211,238,.15)";
-  }
-
-  panel.style.display = "block";
+  _apPnlEstimateTimer = setTimeout(() => {
+    _apPnlAbortController = new AbortController();
+    _fetchPnlEstimate(sym1, sym2, capital, leverage, entryZ, exitZ, "ap-", _apPnlAbortController.signal);
+  }, 500);
 }
 
 async function submitAddPair() {

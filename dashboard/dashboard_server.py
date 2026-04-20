@@ -481,6 +481,15 @@ def start_execution():
     global execution_process, execution_output
     killed = kill_all_bot_processes()
 
+    # Clear any stale status files so old messages (like "Reset") don't linger
+    try:
+        if STATUS_JSON.exists():
+            STATUS_JSON.unlink()
+        for f in EXECUTION_DIR.glob("status_*.json"):
+            f.unlink()
+    except Exception:
+        pass
+
     # Determine which script to launch based on trade_mode from frontend
     data = request.json or {}
     trade_mode = data.get("trade_mode", "single")
@@ -1228,6 +1237,231 @@ def get_pair_zscore_history():
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+@app.route("/api/estimate-pnl", methods=["POST"])
+def estimate_pnl():
+    """Estimate PnL for a specific pair using the same math as the trading engine.
+
+    Uses OLS regression + spread std to compute pct_per_zscore, then estimates
+    gross/net PnL for specified capital/leverage/entry/exit parameters.
+    Also runs a realistic backtest with fees + funding costs.
+
+    Body JSON:
+        sym1, sym2:   ticker symbols (e.g. AZTECUSDT, BIGTIMEUSDT)
+        capital:      allocated capital in USDT (default 10)
+        leverage:     leverage multiplier (default 1)
+        entry_z:      z-score entry threshold (default 1.1)
+        exit_z:       z-score exit threshold (default 0.0)
+
+    Returns comprehensive estimation including backtest metrics.
+    """
+    try:
+        import math as _math
+        import numpy as np
+        import pandas as pd
+        import statsmodels.api as sm
+
+        data = request.json or {}
+        sym1 = str(data.get("sym1", "")).strip().upper()
+        sym2 = str(data.get("sym2", "")).strip().upper()
+        if not sym1 or not sym2:
+            return jsonify({"error": "Missing sym1 or sym2"}), 400
+
+        capital  = float(data.get("capital", 10))
+        leverage = float(data.get("leverage", 1))
+        entry_z  = float(data.get("entry_z", 1.1))
+        exit_z   = float(data.get("exit_z", 0.0))
+
+        # ── Read execution config ─────────────────────────────────────────
+        exec_cfg    = parse_execution_config()
+        timeframe   = exec_cfg.get("timeframe", 60)
+        z_window    = exec_cfg.get("z_score_window", 21)
+        kline_limit = exec_cfg.get("kline_limit", 200)
+
+        # ── Fetch klines from Bybit ───────────────────────────────────────
+        sess = _get_pub_session()
+        r1 = sess.get_mark_price_kline(category="linear", symbol=sym1,
+                                        interval=str(timeframe), limit=kline_limit)
+        r2 = sess.get_mark_price_kline(category="linear", symbol=sym2,
+                                        interval=str(timeframe), limit=kline_limit)
+
+        kl1 = list(reversed(r1.get("result", {}).get("list", [])))
+        kl2 = list(reversed(r2.get("result", {}).get("list", [])))
+        if not kl1 or not kl2:
+            return jsonify({"error": "No kline data returned from Bybit"}), 500
+
+        n = min(len(kl1), len(kl2))
+        p1 = [float(kl1[i][4]) for i in range(n)]
+        p2 = [float(kl2[i][4]) for i in range(n)]
+
+        if n < z_window + 5:
+            return jsonify({"error": f"Insufficient data: got {n}, need {z_window + 5}"}), 400
+
+        # ── OLS regression → hedge ratio (same as bot) ────────────────────
+        model = sm.OLS(p1, p2).fit()
+        hedge_ratio = float(model.params[0])
+
+        # ── Spread + rolling stats (same as bot's calculate_zscore) ───────
+        spread_arr = np.array([p1[i] - hedge_ratio * p2[i] for i in range(n)])
+        spread_series = pd.Series(spread_arr)
+        rolling_mean = spread_series.rolling(center=False, window=z_window).mean()
+        rolling_std  = spread_series.rolling(center=False, window=z_window).std()
+        zscore_series = (spread_series - rolling_mean) / rolling_std
+
+        # Current z-score and spread stats
+        current_zscore = float(zscore_series.iloc[-1])
+        current_std    = float(rolling_std.iloc[-1])
+
+        # Average prices
+        avg_price_1 = float(np.mean(p1))
+        avg_price_2 = float(np.mean(p2))
+
+        # ── pct_per_zscore: profit % per 1σ move (same as strategy) ───────
+        # This is the KEY metric: (std / avgPrice1) × 100
+        # It tells how much % PnL a 1-zscore move generates per unit notional
+        pct_per_zscore = (current_std / avg_price_1) * 100 if avg_price_1 > 0 else 0.0
+
+        # ── PnL estimation ────────────────────────────────────────────────
+        z_delta = abs(entry_z - exit_z)
+        notional_per_leg = (capital / 2) * leverage
+
+        # Gross PnL: z_delta z-score moves × pct_per_zscore% per z-score × notional
+        gross_pnl_pct = z_delta * pct_per_zscore
+        gross_pnl = notional_per_leg * (gross_pnl_pct / 100)
+
+        # Fees: 4 order fills (open 2 legs + close 2 legs)
+        taker_fee_rate = 0.00055  # 0.055% per fill
+        total_fees = 4 * notional_per_leg * taker_fee_rate
+
+        net_pnl = gross_pnl - total_fees
+        return_pct = (net_pnl / capital) * 100 if capital > 0 else 0.0
+
+        # Minimum z-score needed to break even (after fees)
+        fee_pct = 4 * taker_fee_rate * 100  # % cost of round-trip
+        min_z_breakeven = (fee_pct / pct_per_zscore) if pct_per_zscore > 0 else 999.0
+
+        # ── Realistic backtest ────────────────────────────────────────────
+        zscore_arr = zscore_series.values
+        timeframe_hours = timeframe / 60
+
+        # Fetch funding rates for cost calculation
+        fr_1 = 0.0
+        fr_2 = 0.0
+        try:
+            tickers_resp = sess.get_tickers(category="linear")
+            for t in tickers_resp.get("result", {}).get("list", []):
+                sym = t.get("symbol", "")
+                if sym == sym1:
+                    fr_1 = float(t.get("fundingRate", "0"))
+                elif sym == sym2:
+                    fr_2 = float(t.get("fundingRate", "0"))
+        except Exception:
+            pass
+        net_funding_rate = abs(fr_1) + abs(fr_2)
+
+        # Run backtest simulation
+        bt_trades = []
+        in_trade = False
+        entry_spread = 0.0
+        entry_idx = 0
+        trade_side = None
+
+        for i in range(len(zscore_arr)):
+            z = zscore_arr[i]
+            if _math.isnan(z):
+                continue
+            if not in_trade:
+                if abs(z) > entry_z:
+                    in_trade = True
+                    trade_side = "positive" if z > 0 else "negative"
+                    entry_spread = spread_arr[i]
+                    entry_idx = i
+            else:
+                should_exit = (
+                    (trade_side == "positive" and z < exit_z) or
+                    (trade_side == "negative" and z >= -exit_z)
+                )
+                if should_exit:
+                    exit_spread = spread_arr[i]
+                    hold_candles = i - entry_idx
+                    hold_hours = hold_candles * timeframe_hours
+
+                    if trade_side == "positive":
+                        spread_pnl = entry_spread - exit_spread
+                    else:
+                        spread_pnl = exit_spread - entry_spread
+
+                    spread_pnl_pct = (spread_pnl / avg_price_1) * 100 if avg_price_1 > 0 else 0
+                    trading_fee_pct = taker_fee_rate * 4 * 100
+                    funding_cost_pct = abs(net_funding_rate) * (hold_hours / 8) * 2 * 100
+                    net_pnl_pct = spread_pnl_pct - trading_fee_pct - funding_cost_pct
+
+                    bt_trades.append({
+                        "net_pnl_pct": net_pnl_pct,
+                        "hold_hours": hold_hours,
+                    })
+                    in_trade = False
+                    trade_side = None
+
+        # Backtest summary
+        bt_total = len(bt_trades)
+        if bt_total > 0:
+            pnl_list = [t["net_pnl_pct"] for t in bt_trades]
+            profits = [p for p in pnl_list if p > 0]
+            losses  = [abs(p) for p in pnl_list if p <= 0]
+            bt_avg_profit = float(np.mean(pnl_list))
+            bt_win_rate   = len(profits) / bt_total
+            bt_pf = sum(profits) / sum(losses) if sum(losses) > 0 else (999.0 if profits else 0.0)
+        else:
+            bt_avg_profit = 0.0
+            bt_win_rate   = 0.0
+            bt_pf         = 0.0
+
+        # ── Response ──────────────────────────────────────────────────────
+        return jsonify({
+            "pair": f"{sym1} / {sym2}",
+            "sym1": sym1,
+            "sym2": sym2,
+            # Core metrics
+            "hedge_ratio":      round(hedge_ratio, 5),
+            "spread_std":       round(current_std, 8),
+            "avg_price_1":      round(avg_price_1, 6),
+            "avg_price_2":      round(avg_price_2, 6),
+            "pct_per_zscore":   round(pct_per_zscore, 4),
+            "current_zscore":   round(current_zscore, 4),
+            # PnL estimation
+            "z_delta":          round(z_delta, 2),
+            "gross_pnl":        round(gross_pnl, 4),
+            "total_fees":       round(total_fees, 4),
+            "net_pnl":          round(net_pnl, 4),
+            "return_pct":       round(return_pct, 4),
+            "gross_pnl_pct":    round(gross_pnl_pct, 4),
+            "min_z_breakeven":  round(min_z_breakeven, 4),
+            # Backtest
+            "backtest": {
+                "total_trades":     bt_total,
+                "avg_net_profit":   round(bt_avg_profit, 4),
+                "win_rate":         round(bt_win_rate, 4),
+                "profit_factor":    round(bt_pf, 4),
+            },
+            # Funding
+            "funding_rate_1":   round(fr_1, 6),
+            "funding_rate_2":   round(fr_2, 6),
+            "net_funding_rate": round(net_funding_rate, 6),
+            # Config used
+            "config": {
+                "capital":   capital,
+                "leverage":  leverage,
+                "entry_z":   entry_z,
+                "exit_z":    exit_z,
+                "timeframe": timeframe,
+                "kline_limit": kline_limit,
+                "z_window":  z_window,
+            },
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
 
 @app.route("/api/backtest", methods=["GET"])
 def get_backtest():
@@ -1841,6 +2075,12 @@ def remove_portfolio_pair():
         )
         match = pair_id_pattern.search(content)
         if not match:
+            # Pair not in config — but still clean up orphan status file if it exists
+            status_file = EXECUTION_DIR / f"status_{pair_id}.json"
+            if status_file.exists():
+                status_file.unlink()
+                return jsonify({"status": "removed", "pair_id": pair_id,
+                                "note": "Removed orphan status file (pair was not in config)"})
             return jsonify({"error": f"Pair '{pair_id}' not found in config"}), 404
 
         # Walk backwards from pair_id to find "PairConfig("
@@ -2111,8 +2351,17 @@ def _ws_background_push():
             running = execution_process is not None and execution_process.poll() is None
             with execution_lock:
                 lines = list(execution_output[-100:])
+            # Read status.json
+            status_data = {}
+            try:
+                if STATUS_JSON.exists():
+                    status_data = json.loads(STATUS_JSON.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
             socketio.emit("exec_status", {
                 "running": running,
+                "status": status_data,
                 "output": lines,
             })
 
